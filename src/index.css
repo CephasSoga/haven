@@ -24,6 +24,8 @@
   --cal-soft: #efecff;
   --fin: #1f9e85;
   --fin-soft: #e2f4ef;
+  --note: #b7791f;
+  --note-soft: #f8efd9;
   --pos: #1f9e85;
   --neg: #e0555a;
 
@@ -50,6 +52,8 @@
   --cal-soft: #221f3a;
   --fin: #3cc3a5;
   --fin-soft: #12302a;
+  --note: #e8b04a;
+  --note-soft: #2e2614;
   --pos: #3cc3a5;
   --neg: #ff7a7e;
 
@@ -77,6 +81,8 @@
   --color-cal-soft: var(--cal-soft);
   --color-fin: var(--fin);
   --color-fin-soft: var(--fin-soft);
+  --color-note: var(--note);
+  --color-note-soft: var(--note-soft);
   --color-pos: var(--pos);
   --color-neg: var(--neg);
 

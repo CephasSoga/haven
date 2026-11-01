@@ -14,9 +14,10 @@ npm run build      # type-check + production build into dist/
 
 | Module    | What it does today |
 |-----------|--------------------|
-| Today     | Greeting, today's agenda, what's coming up, money snapshot |
+| Today     | Greeting, today's agenda, what's coming up, money snapshot, pinned notes |
 | Calendar  | Month & week views, day agenda, create/edit/delete events (timed or all-day, color, location, notes) |
 | Finances  | Accounts, income/expense transactions, categories with monthly budgets, 6-month cashflow, spending breakdown |
+| Notes     | Two-pane notes with search, pinning, colors and inline #tags (filterable); empty notes clean themselves up |
 | Settings  | Name, light/dark/auto theme, currency, week start, export/import backup, sample data, erase |
 
 ## Structure
@@ -29,6 +30,7 @@ src/
     registry.tsx   ← every module is registered here; nav + routes follow
     calendar/      store, month/week views, event dialog
     finances/      store, overview/transactions/budgets/accounts tabs, charts
+    notes/         store, list + editor page
   pages/           Today, Settings
   store/           app-wide settings
 ```

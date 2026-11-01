@@ -1,10 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react";
 import { Button, Card, Input, PageHeader, Segmented, Select } from "@/components/ui";
-import { sampleEvents, sampleFinances } from "@/lib/sample";
+import { sampleEvents, sampleFinances, sampleNotes } from "@/lib/sample";
 import { useSettings, type Theme } from "@/store/settings";
 import { useCalendar } from "@/modules/calendar/store";
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES, useFinance } from "@/modules/finances/store";
+import { useNotes } from "@/modules/notes/store";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
 
@@ -33,6 +34,7 @@ export function SettingsPage() {
   const settings = useSettings();
   const calendar = useCalendar();
   const finance = useFinance();
+  const notes = useNotes();
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -49,6 +51,7 @@ export function SettingsPage() {
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
       calendar: { events: calendar.events },
       finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions },
+      notes: { notes: notes.notes },
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -71,6 +74,7 @@ export function SettingsPage() {
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
         transactions: data.finances?.transactions ?? [],
       });
+      notes.replaceAll(data.notes?.notes ?? []);
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -148,21 +152,23 @@ export function SettingsPage() {
         <Row title="Sample data" hint="Fill Haven with realistic examples to explore">
           <Button
             onClick={() => {
-              if (!confirm("Replace your calendar and finances with sample data?")) return;
+              if (!confirm("Replace your calendar, finances and notes with sample data?")) return;
               finance.replaceAll(sampleFinances());
               calendar.replaceAll(sampleEvents(new Date(), settings.weekStartsOn));
+              notes.replaceAll(sampleNotes());
               flash("Sample data loaded.");
             }}
           >
             Load samples
           </Button>
         </Row>
-        <Row title="Erase everything" hint="Deletes all events, accounts and transactions">
+        <Row title="Erase everything" hint="Deletes all events, accounts, transactions and notes">
           <Button
             variant="danger"
             onClick={() => {
               if (!confirm("Erase all of your Haven data? Export a backup first if you might want it back.")) return;
               calendar.replaceAll([]);
+              notes.replaceAll([]);
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");
             }}

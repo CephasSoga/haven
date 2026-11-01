@@ -3,6 +3,7 @@ import { dayKey } from "./dates";
 import { uid } from "./utils";
 import type { CalendarEvent } from "@/modules/calendar/store";
 import { DEFAULT_CATEGORIES, type FinanceData, type Transaction } from "@/modules/finances/store";
+import type { Note } from "@/modules/notes/store";
 
 /** Small deterministic PRNG so sample data looks the same every time. */
 function rng(seed: number) {
@@ -52,6 +53,59 @@ export function sampleFinances(today = new Date()): FinanceData {
     categories: DEFAULT_CATEGORIES,
     transactions: txs,
   };
+}
+
+export function sampleNotes(now = Date.now()): Note[] {
+  const h = 3_600_000;
+  const note = (title: string, body: string, color: string, ageHours: number, pinned = false): Note => ({
+    id: uid(),
+    title,
+    body,
+    color,
+    pinned,
+    createdAt: now - ageHours * h - 72 * h,
+    updatedAt: now - ageHours * h,
+  });
+  return [
+    note(
+      "Weekend in the mountains",
+      "Packing\n- Hiking boots, rain jacket\n- Thermos & snacks\n- Camera + spare battery\n- Paper map, just in case\n\nTrain leaves Friday at 18:12 — book seats by Wednesday.\n\n#travel",
+      "teal",
+      2,
+      true,
+    ),
+    note(
+      "Ideas for Haven",
+      "Things I'd love next:\n- Repeating events (weekly yoga!)\n- Transfers between accounts\n- Recurring bills that show up on the calendar\n- Install on my phone\n\n#projects",
+      "violet",
+      20,
+      true,
+    ),
+    note(
+      "Design review — notes",
+      "Went well overall. Typography felt calmer after the spacing pass.\n\nFollow-ups\n- Send revised mockups to the team by Thursday\n- Ask about the empty states on mobile\n\n#work",
+      "blue",
+      5,
+    ),
+    note(
+      "Gift ideas for Mum",
+      "Her birthday is this week.\n- That ceramics class she mentioned\n- A good olive oil + a cookbook\n- Framed photo from the summer trip\n\n#family",
+      "pink",
+      30,
+    ),
+    note(
+      "Lemon pasta",
+      "Spaghetti, 2 lemons (zest + juice), butter, parmesan, black pepper, a ladle of pasta water. Toss off the heat until glossy. Basil on top.\n\n#cooking",
+      "green",
+      96,
+    ),
+    note(
+      "Books to read",
+      "- The Overstory\n- Four Thousand Weeks\n- Piranesi\n- A Psalm for the Wild-Built\n\n#reading",
+      "amber",
+      240,
+    ),
+  ];
 }
 
 export function sampleEvents(today = new Date(), weekStartsOn: 0 | 1 = 1): CalendarEvent[] {

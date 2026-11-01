@@ -1,7 +1,8 @@
 import type { ComponentType } from "react";
-import { CalendarDays, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, NotebookPen, Wallet, type LucideIcon } from "lucide-react";
 import { CalendarPage } from "./calendar/CalendarPage";
 import { FinancesPage } from "./finances/FinancesPage";
+import { NotesPage } from "./notes/NotesPage";
 
 export type ModuleDef = {
   id: string;
@@ -20,4 +21,5 @@ export type ModuleDef = {
 export const MODULES: ModuleDef[] = [
   { id: "calendar", name: "Calendar", path: "/calendar", icon: CalendarDays, accent: "var(--cal)", page: CalendarPage },
   { id: "finances", name: "Finances", path: "/finances", icon: Wallet, accent: "var(--fin)", page: FinancesPage },
+  { id: "notes", name: "Notes", path: "/notes", icon: NotebookPen, accent: "var(--note)", page: NotesPage },
 ];

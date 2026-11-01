@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { addDays, format, isTomorrow } from "date-fns";
 import { motion } from "motion/react";
-import { ArrowRight, CalendarPlus, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarPlus, NotebookPen, Pin, Plus, Sparkles } from "lucide-react";
 import { Button, Card, CardHeader, Progress } from "@/components/ui";
 import { dayKey, greeting, monthKey, parseDay, todayKey } from "@/lib/dates";
 import { useMoney } from "@/lib/money";
-import { sampleEvents, sampleFinances } from "@/lib/sample";
+import { sampleEvents, sampleFinances, sampleNotes } from "@/lib/sample";
 import { swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { DayAgenda } from "@/modules/calendar/DayAgenda";
@@ -15,6 +15,7 @@ import { compareEvents, timeRange, useCalendar, type CalendarEvent, type EventDr
 import { TransactionDialog, type TxDraft } from "@/modules/finances/TransactionDialog";
 import { TxRow } from "@/modules/finances/parts";
 import { inMonth, sortTransactions, spendByCategory, totalBalance, totals, useFinance, type Transaction } from "@/modules/finances/store";
+import { compareNotes, preview, useNotes } from "@/modules/notes/store";
 
 const rise = (i: number) => ({
   initial: { opacity: 0, y: 12 },
@@ -27,6 +28,10 @@ export function TodayPage() {
   const events = useCalendar((s) => s.events);
   const replaceEvents = useCalendar((s) => s.replaceAll);
   const fin = useFinance();
+  const notes = useNotes((s) => s.notes);
+  const replaceNotes = useNotes((s) => s.replaceAll);
+  const createNote = useNotes((s) => s.create);
+  const navigate = useNavigate();
   const money = useMoney();
   const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
   const [txDraft, setTxDraft] = useState<TxDraft | null>(null);
@@ -51,7 +56,9 @@ export function TodayPage() {
   const catById = new Map(fin.categories.map((c) => [c.id, c]));
   const accById = new Map(fin.accounts.map((a) => [a.id, a]));
 
-  const isEmpty = events.length === 0 && fin.transactions.length === 0;
+  const isEmpty = events.length === 0 && fin.transactions.length === 0 && notes.length === 0;
+  const pinnedNotes = [...notes].sort(compareNotes).filter((n) => n.pinned).slice(0, 3);
+  const shownNotes = pinnedNotes.length ? pinnedNotes : [...notes].sort(compareNotes).slice(0, 3);
   const openEvent = (e: CalendarEvent) => setEventDraft({ ...e });
   const newEvent = () => setEventDraft({ title: "", date: today, start: "09:00", end: "10:00", color: "violet" });
   const newTx = () =>
@@ -66,6 +73,7 @@ export function TodayPage() {
   const loadSample = () => {
     fin.replaceAll(sampleFinances());
     replaceEvents(sampleEvents(new Date(), weekStartsOn));
+    replaceNotes(sampleNotes());
   };
 
   const firstName = name.trim().split(/\s+/)[0];
@@ -101,7 +109,7 @@ export function TodayPage() {
                 <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-cal">
                   <Sparkles className="size-4" /> Welcome to Haven
                 </div>
-                <h2 className="font-serif text-3xl">A calm home for your days and your money.</h2>
+                <h2 className="font-serif text-3xl">A calm home for your days, your money and your thoughts.</h2>
                 <p className="mt-2 max-w-lg text-sm text-muted">
                   Everything stays on this device. Start with a blank slate, or explore with some sample data first — you can
                   clear it any time from Settings.
@@ -234,6 +242,48 @@ export function TodayPage() {
           </Card>
         </motion.div>
       </div>
+
+      <motion.section {...rise(4)} className="flex flex-col gap-3">
+        <div className="flex items-end justify-between px-1">
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+            <span className="size-2 rounded-full bg-note" /> {pinnedNotes.length ? "Pinned notes" : "Recent notes"}
+          </h2>
+          <Link to="/notes" className="flex items-center gap-1 text-[13px] font-medium text-note hover:underline">
+            Notes <ArrowRight className="size-3.5" />
+          </Link>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {shownNotes.map((n) => {
+            const s = swatch(n.color);
+            return (
+              <Link
+                key={n.id}
+                to={`/notes?id=${n.id}`}
+                className="group relative flex min-h-40 flex-col overflow-hidden rounded-3xl border border-line bg-surface p-5 shadow-card transition-transform hover:-translate-y-0.5"
+              >
+                <div
+                  className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full blur-2xl"
+                  style={{ background: `radial-gradient(circle, ${s.soft}, transparent 70%)` }}
+                />
+                <div className="relative flex items-start justify-between gap-2">
+                  <h3 className="font-serif text-2xl leading-tight">{n.title || "Untitled"}</h3>
+                  {n.pinned && <Pin className="mt-1.5 size-3.5 shrink-0 text-faint" />}
+                </div>
+                <p className="relative mt-2 line-clamp-3 text-[13px] leading-relaxed text-muted">{preview(n)}</p>
+              </Link>
+            );
+          })}
+          <button
+            onClick={() => navigate(`/notes?id=${createNote()}`)}
+            className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-line text-muted transition-colors hover:border-line-strong hover:bg-surface hover:text-ink"
+          >
+            <span className="flex size-10 items-center justify-center rounded-full bg-sunken">
+              <NotebookPen className="size-[18px]" />
+            </span>
+            <span className="text-sm font-medium">Jot something down</span>
+          </button>
+        </div>
+      </motion.section>
 
       <EventDialog draft={eventDraft} onClose={() => setEventDraft(null)} />
       <TransactionDialog draft={txDraft} onClose={() => setTxDraft(null)} />
