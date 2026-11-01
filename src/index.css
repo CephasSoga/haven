@@ -1,0 +1,141 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/instrument-serif";
+@import "@fontsource/instrument-serif/400-italic.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- Design tokens ---------- */
+:root {
+  --canvas: #f6f5f1;
+  --surface: #ffffff;
+  --sunken: #efede7;
+  --raised: #ffffff;
+  --line: #e7e4dc;
+  --line-strong: #d8d4c9;
+  --ink: #1b1a17;
+  --muted: #6d6a62;
+  --faint: #a29e93;
+  --primary: #1b1a17;
+  --on-primary: #ffffff;
+  --ring: rgb(124 108 255 / 0.35);
+
+  --cal: #7c6cff;
+  --cal-soft: #efecff;
+  --fin: #1f9e85;
+  --fin-soft: #e2f4ef;
+  --pos: #1f9e85;
+  --neg: #e0555a;
+
+  --shadow-sm: 0 1px 2px rgb(27 26 23 / 0.04), 0 1px 1px rgb(27 26 23 / 0.03);
+  --shadow-md: 0 1px 2px rgb(27 26 23 / 0.04), 0 8px 24px -8px rgb(27 26 23 / 0.10);
+  --shadow-lg: 0 2px 4px rgb(27 26 23 / 0.04), 0 24px 64px -16px rgb(27 26 23 / 0.22);
+}
+
+.dark {
+  --canvas: #0d0e11;
+  --surface: #15171b;
+  --sunken: #101115;
+  --raised: #1c1e23;
+  --line: #24272d;
+  --line-strong: #31353c;
+  --ink: #f1efe9;
+  --muted: #9a978f;
+  --faint: #64625c;
+  --primary: #f1efe9;
+  --on-primary: #121316;
+  --ring: rgb(150 138 255 / 0.4);
+
+  --cal: #978bff;
+  --cal-soft: #221f3a;
+  --fin: #3cc3a5;
+  --fin-soft: #12302a;
+  --pos: #3cc3a5;
+  --neg: #ff7a7e;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 2px 4px rgb(0 0 0 / 0.3), 0 24px 64px -16px rgb(0 0 0 / 0.7);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-cal: var(--cal);
+  --color-cal-soft: var(--cal-soft);
+  --color-fin: var(--fin);
+  --color-fin-soft: var(--fin-soft);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+
+  --shadow-soft: var(--shadow-sm);
+  --shadow-card: var(--shadow-md);
+  --shadow-float: var(--shadow-lg);
+}
+
+/* ---------- Base ---------- */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  color-scheme: light;
+}
+html.dark { color-scheme: dark; }
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+::selection { background: var(--cal-soft); color: var(--ink); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+/* Text fields draw their own focus state */
+:focus-visible:not(input, textarea, select) {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring);
+  border-radius: 10px;
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Subtle paper grain on the canvas */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image: radial-gradient(rgb(0 0 0 / 0.025) 1px, transparent 1px);
+  background-size: 3px 3px;
+  z-index: 0;
+}
+.dark .grain::before {
+  background-image: radial-gradient(rgb(255 255 255 / 0.018) 1px, transparent 1px);
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0.45;
+  cursor: pointer;
+}
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
