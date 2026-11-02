@@ -16,12 +16,12 @@ npm run build      # type-check + production build into dist/
 |-----------|--------------------|
 | Today     | Greeting, today's plan (events + auto-scheduled tasks), what's coming up, money snapshot, current book, pinned notes |
 | Calendar  | Motion-style planner: tasks with duration, priority, type, deadline (hard/soft), start date, chunking and repeats are auto-scheduled into your work or personal hours around events, re-planned whenever anything changes; at-risk warnings; "Up next"; day/week/month views; drag to move or pin, drag edges to resize; repeating events; meeting buffers |
-| Finances  | Accounts, income/expense transactions, categories with monthly budgets, 6-month cashflow, spending breakdown |
+| Finances  | Accounts, income/expense transactions, categories with monthly budgets, 6-month cashflow, spending breakdown. Statement import (CSV with automatic column detection, OFX/QFX, QIF, CAMT.053): skips lines already imported, flags ones you typed by hand, tidies bank descriptions, auto-categorizes (learned rules → built-in merchant list → optional Claude) and remembers each bank's CSV layout |
 | Notes     | Two-pane notes with search, pinning, colors and inline #tags (filterable); empty notes clean themselves up. Morning articles and meeting write-ups are saved here (#reading, #meeting) |
 | Library   | Add PDFs and EPUBs (drag & drop); covers, titles and authors extracted; built-in reader (paper / sepia / night) that saves your place, tracks progress, time spent and completion |
 | Vault     | Encrypted store for logins, cards, bank accounts, IDs, crypto wallets, Wi-Fi, licenses and secure notes; password generator, security check (weak / reused / expiring), auto-lock, clipboard auto-clear |
-| Morning   | Pick your interests; each morning (first time Haven is open after your chosen time) Claude searches the live web and writes a briefing: a lead story plus the top stories per interest, with "why it matters", sources and links. Save articles to Notes. Without an API key, falls back to Hacker News |
-| Meetings  | Live transcription (Chrome/Edge speech recognition) or imported transcripts (.vtt/.srt/.txt from Zoom, Meet, Teams); Claude writes the summary, decisions, open questions, action items (mapped to planner tasks with priority, duration, deadline) and scheduled events; one click adds them to your planner, calendar and a Notes page |
+| Morning   | A morning newspaper with no account or key: reads Google News and Bing News (and any RSS/Atom feeds you add) for your region and language, merges reports of the same story, ranks by how many outlets cover it, prominence and recency, and lays out a lead story, Top stories, topic sections and your interests, with pictures, summaries and "covered by N outlets". Prepared automatically each morning; save articles to Notes. Optional: Claude writes an "In brief" overview |
+| Meetings  | Two ways to listen: Microphone (browser speech recognition) or Headphones (your mic + the meeting's own audio from a shared tab or the system, transcribed on-device by Whisper, with "You"/"Them" labels). Or import .vtt/.srt/.txt transcripts from Zoom, Meet, Teams. Claude writes the summary, decisions, open questions, action items (mapped to planner tasks) and scheduled events; one click adds them to your planner, calendar and a #meeting note. Recording needs Chrome or Edge (not an embedded preview browser) |
 | Settings  | Name, light/dark/auto theme, currency, week start, export/import backup, sample data, erase |
 
 ## Security model (Vault)
@@ -33,7 +33,11 @@ npm run build      # type-check + production build into dist/
 
 ## AI (Claude)
 
-Morning and Meetings call the Claude API directly from the browser with your own Anthropic API key (Settings → AI), using the official `@anthropic-ai/sdk`. Default model: Claude Opus 5.5 (Sonnet 5.5 selectable). Requests opt into Anthropic's server-side fallback (`fallbacks: "default"`), so if a safety classifier declines a request it is retried on a fallback model instead of failing. The key is stored in this browser only and is not included in backups.
+The Meeting assistant (and, optionally, the Morning overview) call the Claude API directly from the browser with your own Anthropic API key (Settings → AI), using the official `@anthropic-ai/sdk`. Default model: Claude Opus 5.5 (Sonnet 5.5 selectable). Requests opt into Anthropic's server-side fallback (`fallbacks: "default"`), so if a safety classifier declines a request it is retried on a fallback model instead of failing. The key is stored in this browser only and is not included in backups.
+
+## Local news fetcher
+
+Browsers can't read most news feeds directly, so Haven's own dev/preview server includes a small fetcher (`server/feedProxy.ts`, endpoint `/api/feed`). It only fetches public http(s) addresses, only returns RSS/Atom/XML, and requires a header other websites can't send. Run Haven with `npm run dev` (or `npm run build && npm run preview`) for the Morning feed to work.
 
 ## Storage
 
@@ -48,7 +52,7 @@ src/
   modules/
     registry.tsx   ← every module is registered here (lazy-loaded); nav + routes follow
     calendar/      store, scheduler (auto-planner), plan hook, time grid, month view, task panel, dialogs
-    finances/      store, overview/transactions/budgets/accounts tabs, charts
+    finances/      store, overview/transactions/budgets/accounts tabs, charts, statement importers, categorization
     notes/         store, list + editor page
     library/       metadata store, IndexedDB files, PDF/EPUB extraction, reader
     vault/         crypto, encrypted store, item kinds, item editor

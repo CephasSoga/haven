@@ -60,7 +60,7 @@ const SCHEMA = {
 const SYSTEM = `You turn meeting transcripts into clear notes and next steps for one person: the one who recorded the meeting.
 
 - Work only from what was said. Never invent people, numbers, dates or commitments. If something is ambiguous, leave it out or put it under open questions.
-- Transcripts come from speech recognition and may contain errors, missing punctuation and no speaker names. Read for meaning.
+- Transcripts come from speech recognition and may contain errors, missing punctuation and no speaker names. Read for meaning. When lines are labelled "You" and "Them", "You" is the recorder and "Them" is everyone else on the call.
 - Action items: concrete commitments to do something. Mark "mine" when the recorder committed to it ("I'll…", "let me…", or their name). Include others' commitments too, with their owner.
 - Resolve relative dates ("Friday", "next week", "end of the month") against the meeting date. Use null when no deadline was given.
 - Events: only meetings or appointments that were actually scheduled, with a date. Don't create events for vague intentions ("we should meet sometime").

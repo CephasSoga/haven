@@ -1,169 +1,290 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import { format } from "date-fns";
 import { aiReady, AiError, baseRequest, client } from "@/lib/ai";
 import { todayKey } from "@/lib/dates";
 import { uid } from "@/lib/utils";
-import type { Edition, FeedItem, Interest } from "./store";
+import { fetchFeed, REGIONS, TOPICS, urls, type Candidate, type Region, type Topic } from "./sources";
+import type { CustomSource, Edition, FeedItem, Interest, Section } from "./store";
 
 /**
- * Prepares the morning edition. With an API key, Claude searches the live web for each interest
- * and writes a short briefing; without one, the hottest Hacker News stories stand in (tech only).
+ * Builds the morning edition without any API key:
+ *  1. fetch every section's feeds (Google News + Bing News + your own feeds) in parallel,
+ *  2. merge reports of the same story from different outlets,
+ *  3. rank stories by how widely they're covered, how prominently, and how recently,
+ *  4. optionally ask Claude for a short written overview.
  */
-export async function gather(interests: Interest[], perInterest: number, onStep?: (s: string) => void): Promise<Edition> {
-  if (!interests.length) throw new AiError("Add a few interests first.");
-  const items = aiReady() ? await withClaude(interests, perInterest, onStep) : await withHackerNews(interests, perInterest, onStep);
-  return { date: todayKey(), generatedAt: Date.now(), via: aiReady() ? "claude" : "hackernews", items };
+
+type Plan = { section: Section; feeds: string[] };
+
+// Bing has no topic feeds; these localised searches stand in for them (and bring images).
+const TOPIC_WORDS: Record<string, Partial<Record<Topic, string>>> = {
+  en: { WORLD: "world news", BUSINESS: "business", TECHNOLOGY: "technology", SCIENCE: "science", HEALTH: "health", SPORTS: "sports", ENTERTAINMENT: "entertainment" },
+  fr: { WORLD: "actualité internationale", BUSINESS: "économie", TECHNOLOGY: "technologie", SCIENCE: "science", HEALTH: "santé", SPORTS: "sport", ENTERTAINMENT: "culture" },
+  de: { WORLD: "Weltnachrichten", BUSINESS: "Wirtschaft", TECHNOLOGY: "Technologie", SCIENCE: "Wissenschaft", HEALTH: "Gesundheit", SPORTS: "Sport", ENTERTAINMENT: "Kultur" },
+  es: { WORLD: "internacional", BUSINESS: "economía", TECHNOLOGY: "tecnología", SCIENCE: "ciencia", HEALTH: "salud", SPORTS: "deportes", ENTERTAINMENT: "cultura" },
+};
+
+function plan(opts: { region: Region; showTop: boolean; topics: Topic[]; interests: Interest[]; sources: CustomSource[] }): Plan[] {
+  const { region: r } = opts;
+  const words = TOPIC_WORDS[r.hl.slice(0, 2)] ?? TOPIC_WORDS.en;
+  const out: Plan[] = [];
+  if (opts.showTop) out.push({ section: { id: "top", label: "Top stories", emoji: "📰" }, feeds: [urls.googleTop(r), urls.bingTop(r)] });
+  for (const i of opts.interests) {
+    const q = i.detail?.trim() || i.name;
+    out.push({ section: { id: i.id, label: i.name, emoji: i.emoji }, feeds: [urls.googleSearch(q, r), urls.bingSearch(q, r)] });
+  }
+  for (const t of opts.topics) {
+    const feeds = [urls.googleTopic(t, r)];
+    if (words[t]) feeds.push(urls.bingSearch(words[t]!, r));
+    out.push({ section: { id: `topic:${t}`, label: TOPICS[t].label, emoji: TOPICS[t].emoji }, feeds });
+  }
+  for (const s of opts.sources) out.push({ section: { id: `src:${s.id}`, label: s.name, emoji: "📰" }, feeds: [s.url] });
+  return out;
 }
 
-/* ---------- Claude + web search ---------- */
+/* ---------- Same story, different outlets ---------- */
 
-const PUBLISH: Anthropic.Beta.BetaTool = {
-  name: "publish_briefing",
-  description: "Publish the finished morning briefing. Call exactly once, after searching, with every story you selected.",
-  strict: true,
-  input_schema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["stories"],
-    properties: {
-      stories: {
-        type: "array",
-        items: {
+const STOP = new Set(
+  (
+    "the a an and or but of to in on at for with from by as is are was were be been has have had will would can could after before over under about into than this that these those it its his her their our your not new says say said how why what who when where which more most up out off amid via vs " +
+    "le la les un une des du de et ou mais en au aux sur pour par avec dans est sont a ont été sera plus ce cette ces son sa ses leur leurs qui que quoi dont où pas ne il elle ils elles nous vous après avant selon face contre " +
+    "der die das ein eine und oder aber von zu im in am auf für mit aus bei ist sind war nicht wie was wer nach vor über " +
+    "el la los las un una y o pero de del en al por para con es son fue no como qué quién tras ante sobre"
+  ).split(" "),
+);
+
+export function tokens(title: string) {
+  return new Set(
+    title
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length > 2 && !STOP.has(w)),
+  );
+}
+
+export function similar(a: Set<string>, b: Set<string>) {
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared++;
+  return shared >= 2 && shared / Math.min(a.size, b.size) >= 0.5;
+}
+
+type Story = { members: Candidate[]; words: Set<string>; score: number };
+
+export function cluster(cands: Candidate[], now = Date.now()): Story[] {
+  const stories: Story[] = [];
+  for (const c of [...cands].sort((a, b) => a.rank - b.rank)) {
+    const words = tokens(c.title);
+    if (words.size < 2) continue;
+    const home = stories.find((s) => similar(s.words, words));
+    if (home) {
+      home.members.push(c, ...(c.group ?? []));
+      for (const w of words) home.words.add(w);
+    } else stories.push({ members: [c, ...(c.group ?? [])], words: new Set(words), score: 0 });
+  }
+  for (const s of stories) {
+    const outlets = new Set(s.members.map((m) => m.source.toLowerCase())).size;
+    const prominence = s.members.reduce((sum, m) => sum + 1 / (1 + m.rank / 8), 0);
+    const newest = Math.max(...s.members.map((m) => m.published ?? 0));
+    const hours = newest ? (now - newest) / 3_600_000 : 24;
+    const recency = hours < 3 ? 3 : hours < 8 ? 2 : hours < 16 ? 1 : hours < 30 ? 0.3 : 0;
+    const hasImage = s.members.some((m) => m.image) ? 0.5 : 0;
+    s.score = outlets * 3 + prominence * 2 + recency + hasImage;
+  }
+  return stories.sort((a, b) => b.score - a.score);
+}
+
+function toItem(s: Story, sectionId: string): FeedItem {
+  // Headline from the most prominent report; image and summary from whichever report has them.
+  const byRank = [...s.members].sort((a, b) => a.rank - b.rank);
+  const head = byRank[0];
+  const rich = s.members.find((m) => m.image && m.snippet) ?? s.members.find((m) => m.snippet) ?? head;
+  // Prefer a direct publisher link over Google's redirect.
+  const direct = s.members.find((m) => !/news\.google\./.test(m.url)) ?? head;
+  const outlets = new Map<string, Candidate>();
+  for (const m of byRank) if (!outlets.has(m.source.toLowerCase())) outlets.set(m.source.toLowerCase(), m);
+  const newest = Math.max(...s.members.map((m) => m.published ?? 0));
+  return {
+    id: uid(),
+    interestId: sectionId,
+    title: head.title,
+    summary: rich.snippet ?? "",
+    source: direct.source,
+    url: direct.url,
+    publishedAt: newest || undefined,
+    image: s.members.find((m) => m.image)?.image,
+    coverage: outlets.size,
+    related: [...outlets.values()].filter((m) => m.source !== direct.source).slice(0, 5).map((m) => ({ source: m.source, url: m.url })),
+  };
+}
+
+/* ---------- Putting it together ---------- */
+
+async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>) {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+export async function gather(
+  opts: { region: string; showTop: boolean; topics: Topic[]; interests: Interest[]; sources: CustomSource[]; perInterest: number; aiBrief: boolean },
+  onStep?: (s: string) => void,
+): Promise<Edition> {
+  const region = REGIONS.find((r) => r.id === opts.region) ?? REGIONS[0];
+  const plans = plan({ ...opts, region });
+  if (!plans.length) throw new AiError("Choose at least one section or interest first.");
+
+  const jobs = plans.flatMap((p, pi) => p.feeds.map((url) => ({ pi, url })));
+  let done = 0;
+  let missingProxy = false;
+  onStep?.(`Reading ${jobs.length} news feeds…`);
+  const results = await pool(jobs, 6, async (j) => {
+    try {
+      return await fetchFeed(j.url);
+    } catch (e) {
+      if (e instanceof Error && e.message === "NO_PROXY") missingProxy = true;
+      return [] as Candidate[];
+    } finally {
+      onStep?.(`Reading news feeds… ${++done} of ${jobs.length}`);
+    }
+  });
+  if (missingProxy && results.every((r) => !r.length))
+    throw new AiError("The news fetcher isn't running. Start Haven with “npm run dev” (or “npm run preview”) and open it from there.");
+  if (results.every((r) => !r.length)) throw new AiError("No news could be fetched. Check your internet connection and try again.");
+
+  onStep?.("Finding the stories everyone is covering…");
+  const cutoff = Date.now() - 48 * 3_600_000;
+  const perSection = plans.map((p, pi) => {
+    const cands = jobs.flatMap((j, ji) => (j.pi === pi ? results[ji] : [])).filter((c) => !c.published || c.published >= cutoff);
+    return { plan: p, stories: cluster(cands) };
+  });
+
+  // A story appears once: in the first section that has it.
+  const placed: Set<string>[] = [];
+  const items: FeedItem[] = [];
+  let leadScore = -1;
+  let lead: FeedItem | null = null;
+  for (const { plan: p, stories } of perSection) {
+    const take = p.section.id === "top" ? opts.perInterest + 2 : opts.perInterest;
+    let n = 0;
+    for (const s of stories) {
+      if (n >= take) break;
+      if (placed.some((w) => similar(w, s.words))) continue;
+      placed.push(s.words);
+      const item = toItem(s, p.section.id);
+      items.push(item);
+      n++;
+      if (s.score > leadScore && (p.section.id === "top" || !opts.showTop)) (leadScore = s.score), (lead = item);
+    }
+  }
+  if (!lead && items.length) lead = items[0];
+  if (lead) lead.lead = true;
+
+  onStep?.("Adding pictures and summaries…");
+  await enrich(items, region);
+
+  const all = results.flat();
+  const edition: Edition = {
+    date: todayKey(),
+    generatedAt: Date.now(),
+    via: "news",
+    items,
+    sections: plans.map((p) => p.section),
+    stats: { stories: all.length, outlets: new Set(all.map((c) => c.source.toLowerCase())).size },
+  };
+
+  if (opts.aiBrief && aiReady() && items.length) {
+    onStep?.("Writing your briefing…");
+    try {
+      Object.assign(edition, await brief(edition));
+    } catch {
+      /* the edition is still useful without the written overview */
+    }
+  }
+  return edition;
+}
+
+/**
+ * Google gives breadth but no pictures or summaries. For the stories you'll see first, look the
+ * headline up on Bing News and borrow its image, summary and direct publisher link.
+ */
+async function enrich(items: FeedItem[], region: Region) {
+  const seen = new Map<string, number>();
+  const first = items.filter((i) => {
+    const n = (seen.get(i.interestId) ?? 0) + 1;
+    seen.set(i.interestId, n);
+    return (i.lead || n <= 4) && (!i.image || !i.summary);
+  });
+  await pool(first.slice(0, 40), 6, async (item) => {
+    const results = await fetchFeed(urls.bingSearch(item.title.slice(0, 140), region)).catch(() => [] as Candidate[]);
+    const words = tokens(item.title);
+    const match = results.find((r) => similar(tokens(r.title), words));
+    if (!match) return;
+    item.image ??= match.image;
+    if (!item.summary && match.snippet) item.summary = match.snippet;
+    if (/news\.google\./.test(item.url) && !/news\.google\./.test(match.url)) {
+      item.url = match.url;
+      item.source = match.source;
+    }
+    if (match.source !== item.source && !item.related?.some((r) => r.source === match.source)) item.related = [...(item.related ?? []), { source: match.source, url: match.url }];
+  });
+}
+
+/* ---------- Optional: a written overview by Claude ---------- */
+
+async function brief(edition: Edition): Promise<Partial<Edition>> {
+  const label = new Map((edition.sections ?? []).map((s) => [s.id, s.label]));
+  const top = [...edition.items].sort((a, b) => (b.coverage ?? 0) - (a.coverage ?? 0)).slice(0, 30);
+  const res = await client().beta.messages.create({
+    ...baseRequest(),
+    max_tokens: 4000,
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
           type: "object",
           additionalProperties: false,
-          required: ["interest_id", "title", "summary", "why_it_matters", "source", "url", "published", "lead"],
+          required: ["brief", "why"],
           properties: {
-            interest_id: { type: "string", description: "The id of the interest this story belongs to" },
-            title: { type: "string", description: "A clear, neutral headline in your own words" },
-            summary: { type: "string", description: "Two or three sentences: what happened, with concrete facts" },
-            why_it_matters: { type: "string", description: "One sentence on why this matters to someone following this interest" },
-            source: { type: "string", description: "Publication name, e.g. Reuters" },
-            url: { type: "string", description: "The article URL exactly as it appeared in your search results" },
-            published: { type: "string", description: "Publication date as YYYY-MM-DD, or an empty string if unknown" },
-            lead: { type: "boolean", description: "True for exactly one story: the single most important of the morning" },
+            brief: { type: "string", description: "3-5 sentence overview of this morning's news, most important first" },
+            why: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id", "why"],
+                properties: { id: { type: "string" }, why: { type: "string", description: "One sentence: why this matters" } },
+              },
+            },
           },
         },
       },
     },
-  },
-};
-
-const SYSTEM = `You are the editor of a personal morning news briefing. You find what genuinely matters today for one reader, using web search.
-
-How to work:
-- Search the live web for each interest. Focus on news from the last 24 hours; extend to 48 hours only when an interest is quiet.
-- Prefer original reporting from reputable outlets. Skip press releases, listicles, rumours, sponsored content and duplicates of the same event.
-- Rank by significance and momentum ("what people will be talking about today"), not by recency alone.
-- Write in plain, calm English. Summaries state facts; no hype, no emoji.
-- Only use URLs that appeared in your search results. Never invent or guess a URL.
-- When you're done, call publish_briefing once with all stories.`;
-
-async function withClaude(interests: Interest[], perInterest: number, onStep?: (s: string) => void) {
-  const c = client();
-  const list = interests.map((i) => `- id: ${i.id} — ${i.name}${i.detail ? ` (${i.detail})` : ""}`).join("\n");
-  const messages: Anthropic.Beta.BetaMessageParam[] = [
-    {
-      role: "user",
-      content: `Today is ${format(new Date(), "EEEE d MMMM yyyy")}. Prepare my morning briefing with up to ${perInterest} stories for each of these interests:\n${list}\n\nMark exactly one story overall as the lead.`,
-    },
-  ];
-  const tools: Anthropic.Beta.BetaToolUnion[] = [
-    { type: "web_search_20260209", name: "web_search", max_uses: Math.min(24, interests.length * 3 + 2) },
-    PUBLISH,
-  ];
-  const seen = new Set<string>();
-  const norm = (u: string) => u.replace(/[#?].*$/, "").replace(/\/$/, "").toLowerCase();
-
-  onStep?.("Searching the news…");
-  for (let turn = 0; turn < 6; turn++) {
-    const res = await c.beta.messages.create({
-      ...baseRequest(),
-      max_tokens: 16000,
-      output_config: { effort: "medium" },
-      system: SYSTEM,
-      tools,
-      messages,
-    });
-    if (res.stop_reason === "refusal") throw new AiError("Claude declined to prepare this briefing. Try rewording your interests.");
-
-    for (const block of res.content) {
-      if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
-        for (const r of block.content) if (r.type === "web_search_result") seen.add(norm(r.url));
-      }
-    }
-
-    const call = res.content.find((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use" && b.name === "publish_briefing");
-    if (call) {
-      onStep?.("Writing your briefing…");
-      return toItems(call.input, interests, seen, norm);
-    }
-
-    messages.push({ role: "assistant", content: res.content as Anthropic.Beta.BetaContentBlockParam[] });
-    // A long search can pause mid-turn; resending the conversation lets it carry on.
-    if (res.stop_reason === "pause_turn") {
-      onStep?.("Still reading…");
-      continue;
-    }
-    messages.push({ role: "user", content: "Please publish the briefing now with the stories you found." });
-  }
-  throw new AiError("The briefing took too long to prepare. Try again, or with fewer interests.");
-}
-
-type RawStory = { interest_id: string; title: string; summary: string; why_it_matters: string; source: string; url: string; published: string; lead: boolean };
-
-function toItems(input: unknown, interests: Interest[], seen: Set<string>, norm: (u: string) => string): FeedItem[] {
-  const stories = ((input as { stories?: RawStory[] })?.stories ?? []).filter((s) => s && s.title && /^https?:\/\//.test(s.url));
-  const ids = new Set(interests.map((i) => i.id));
-  // Drop anything whose link didn't come from an actual search result.
-  const verified = seen.size ? stories.filter((s) => seen.has(norm(s.url))) : stories;
-  let leadSeen = false;
-  return verified
-    .filter((s) => ids.has(s.interest_id))
-    .map((s) => {
-      const lead = s.lead && !leadSeen;
-      if (lead) leadSeen = true;
-      return {
-        id: uid(),
-        interestId: s.interest_id,
-        title: s.title,
-        summary: s.summary,
-        why: s.why_it_matters || undefined,
-        source: s.source,
-        url: s.url,
-        published: s.published || undefined,
-        lead,
-      };
-    });
-}
-
-/* ---------- Free fallback: Hacker News ---------- */
-
-type HnHit = { objectID: string; title: string; url: string | null; points: number; num_comments: number; created_at: string };
-
-async function withHackerNews(interests: Interest[], perInterest: number, onStep?: (s: string) => void) {
-  const since = Math.floor(Date.now() / 1000) - 48 * 3600;
-  const out: FeedItem[] = [];
-  let best: { item: FeedItem; points: number } | null = null;
-  for (const i of interests) {
-    onStep?.(`Looking up ${i.name}…`);
-    const q = encodeURIComponent(i.name);
-    const res = await fetch(`https://hn.algolia.com/api/v1/search?query=${q}&tags=story&numericFilters=created_at_i>${since},points>5&hitsPerPage=30`);
-    if (!res.ok) continue;
-    const hits = ((await res.json()).hits as HnHit[]).filter((h) => h.url).sort((a, b) => b.points - a.points).slice(0, perInterest);
-    for (const h of hits) {
-      const item: FeedItem = {
-        id: uid(),
-        interestId: i.id,
-        title: h.title,
-        summary: `${h.points} points and ${h.num_comments} comments on Hacker News.`,
-        source: new URL(h.url!).hostname.replace(/^www\./, ""),
-        url: h.url!,
-        published: h.created_at.slice(0, 10),
-      };
-      out.push(item);
-      if (!best || h.points > best.points) best = { item, points: h.points };
-    }
-  }
-  if (best) best.item.lead = true;
-  return out;
+    system:
+      "You write a calm, factual morning news overview for one reader, using only the headlines and summaries provided — never add facts that aren't in them. Write in the language most of the headlines are in.",
+    messages: [
+      {
+        role: "user",
+        content: [
+          `Today is ${format(new Date(), "EEEE d MMMM yyyy")}. Headlines (id | section | outlets covering | headline — summary):`,
+          ...top.map((i) => `${i.id} | ${label.get(i.interestId) ?? ""} | ${i.coverage ?? 1} | ${i.title}${i.summary ? ` — ${i.summary}` : ""}`),
+          "",
+          "Write the overview, and a 'why it matters' sentence for the 8 most significant stories.",
+        ].join("\n"),
+      },
+    ],
+  });
+  if (res.stop_reason === "refusal") return {};
+  const parsed = JSON.parse(res.content.map((b) => (b.type === "text" ? b.text : "")).join("")) as { brief: string; why: { id: string; why: string }[] };
+  const why = new Map(parsed.why.map((w) => [w.id, w.why]));
+  return { brief: parsed.brief, items: edition.items.map((i) => (why.has(i.id) ? { ...i, why: why.get(i.id) } : i)), via: "claude" };
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { ask } from "@/components/confirm";
 import { useSearchParams } from "react-router";
 import { formatDistanceToNowStrict } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
@@ -194,7 +195,7 @@ export function LibraryPage() {
               <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
                 <AnimatePresence initial={false}>
                   {visible.map((b) => (
-                    <BookTile key={b.id} book={b} onOpen={() => open(b)} onEdit={() => setEditing(b)} onStatus={(status) => update(b.id, { status, finishedAt: status === "finished" ? Date.now() : undefined, progress: status === "finished" ? 1 : b.progress })} onRemove={() => confirm(`Remove “${b.title}” from your library?`) && remove(b.id)} />
+                    <BookTile key={b.id} book={b} onOpen={() => open(b)} onEdit={() => setEditing(b)} onStatus={(status) => update(b.id, { status, finishedAt: status === "finished" ? Date.now() : undefined, progress: status === "finished" ? 1 : b.progress })} onRemove={async () => (await ask({ title: `Remove “${b.title}”?`, body: "The book and its reading progress will be removed from your library.", confirmLabel: "Remove", danger: true })) && remove(b.id)} />
                   ))}
                 </AnimatePresence>
               </div>

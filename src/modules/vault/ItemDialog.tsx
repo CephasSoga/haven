@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ask } from "@/components/confirm";
 import { Eye, EyeOff, RefreshCw, Star, Trash2 } from "lucide-react";
 import { Button, Field, Input, Modal, Textarea } from "@/components/ui";
 import { cn, swatch } from "@/lib/utils";
@@ -114,7 +115,7 @@ export function ItemDialog({ draft, onClose, onSaved }: { draft: ItemDraft | nul
             <Button
               variant="danger"
               onClick={async () => {
-                if (!confirm(`Delete “${f.name}” from your vault? This can't be undone.`)) return;
+                if (!(await ask({ title: `Delete “${f.name}”?`, body: "It will be removed from your vault. This can't be undone.", confirmLabel: "Delete", danger: true }))) return;
                 await remove(f.id!);
                 onClose();
               }}

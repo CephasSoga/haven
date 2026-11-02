@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ask } from "@/components/confirm";
 import { Link, useSearchParams } from "react-router";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
@@ -11,6 +12,7 @@ import {
   ClipboardPaste,
   FileText,
   Flag,
+  Headphones,
   Info,
   ListPlus,
   Mic,
@@ -21,12 +23,13 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Select, Textarea } from "@/components/ui";
+import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Segmented, Select, Textarea } from "@/components/ui";
 import { explain, useAi } from "@/lib/ai";
 import { cn } from "@/lib/utils";
 import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
 import { addEvent, addTask, analyze, todayLabel, writeNotesPage } from "./agent";
 import { LANGUAGES, speechSupported, useSpeech } from "./speech";
+import { MeetingCapture, meetingCaptureSupported, prepareModel, queued } from "./capture";
 import { clock, parseTranscript, useMeetings, type Meeting } from "./store";
 
 export function MeetingsPage() {
@@ -80,8 +83,8 @@ export function MeetingsPage() {
               key={selected.id}
               meeting={selected}
               onBack={() => select(null)}
-              onDelete={() => {
-                if (!confirm("Delete this meeting and its transcript? Tasks, events and pages you already added stay.")) return;
+              onDelete={async () => {
+                if (!(await ask({ title: "Delete this meeting?", body: "Its transcript and notes go too. Tasks, events and notes you already added stay where they are.", confirmLabel: "Delete", danger: true }))) return;
                 remove(selected.id);
                 select(null);
               }}
@@ -109,7 +112,7 @@ export function MeetingsPage() {
 /* ---------- One meeting ---------- */
 
 function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: () => void; onDelete: () => void }) {
-  const { update, addSegment, setLanguage } = useMeetings();
+  const { update, addSegment, setLanguage, mode, setMode } = useMeetings();
   const hasKey = useAi((s) => !!s.apiKey.trim());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,36 +123,103 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const fileRef = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
+  // Headphones mode: microphone + shared meeting audio, transcribed locally.
+  const capture = useRef<MeetingCapture | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const [starting, setStarting] = useState<string | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [backlog, setBacklog] = useState(0);
+
   const elapsed = () => meeting.recorded + (sessionStart.current ? Date.now() - sessionStart.current : 0);
   const speech = useSpeech(meeting.language, (text) => addSegment(meeting.id, { at: elapsed(), text }));
+  const listening = speech.listening || capturing;
 
+  // Speech recognition can stop on its own (microphone blocked, device unplugged, network).
+  // Close the session then too, so the clock never keeps counting while nothing is listening;
+  // a session that failed with an error doesn't count as recorded time.
+  const wasListening = useRef(false);
   useEffect(() => {
-    if (!speech.listening) return;
-    const t = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(t);
-  }, [speech.listening]);
-
-  useEffect(() => {
-    if (speech.listening) bottom.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [meeting.segments.length, speech.interim, speech.listening]);
-
-  const toggle = () => {
     if (speech.listening) {
-      update(meeting.id, { recorded: elapsed() });
+      wasListening.current = true;
+      return;
+    }
+    if (!wasListening.current) return;
+    wasListening.current = false;
+    if (sessionStart.current && !capture.current) {
+      if (!speech.error) update(meeting.id, { recorded: elapsed() });
       sessionStart.current = null;
-      speech.stop();
-    } else {
-      if (!meeting.segments.length && meeting.recorded === 0) update(meeting.id, { startedAt: Date.now() });
+    }
+    // Only react to listening starting or stopping.
+  }, [speech.listening]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!listening && !backlog) return;
+    const t = setInterval(() => {
+      setNow(Date.now());
+      setBacklog(queued);
+    }, 500);
+    return () => clearInterval(t);
+  }, [listening, backlog]);
+
+  useEffect(() => {
+    if (listening) bottom.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [meeting.segments.length, speech.interim, listening]);
+
+  // Leaving the meeting (or the page) stops listening.
+  useEffect(() => () => capture.current?.stop(), []);
+
+  const pause = () => {
+    update(meeting.id, { recorded: elapsed() });
+    sessionStart.current = null;
+    if (capture.current) {
+      capture.current.stop();
+      capture.current = null;
+      setCapturing(false);
+      setBacklog(queued);
+    } else speech.stop();
+  };
+
+  const toggle = async () => {
+    if (listening) return pause();
+    if (!meeting.segments.length && meeting.recorded === 0) update(meeting.id, { startedAt: Date.now() });
+    if (mode === "mic") {
       sessionStart.current = Date.now();
-      speech.start();
+      if (!speech.start()) sessionStart.current = null;
+      return;
+    }
+    setCaptureError(null);
+    try {
+      setStarting("Preparing the speech model…");
+      await prepareModel((s) => s.phase === "loading" && setStarting(`Downloading the speech model — ${Math.round(s.progress)}% (one time only)`));
+      setStarting("Choose the meeting to listen to…");
+      const c = new MeetingCapture({
+        language: meeting.language,
+        offset: meeting.recorded,
+        onLine: (line) => addSegment(meeting.id, line),
+        onEnded: (reason) => {
+          pause();
+          if (reason) setCaptureError(`${reason} Press the button to listen again.`);
+        },
+      });
+      await c.start();
+      capture.current = c;
+      sessionStart.current = Date.now();
+      setCapturing(true);
+    } catch (e) {
+      const err = e as Error;
+      setCaptureError(err.name === "NotAllowedError" ? "Sharing or microphone access was cancelled." : err.message);
+    } finally {
+      setStarting(null);
     }
   };
 
   const run = async () => {
-    if (speech.listening) toggle();
+    if (listening) pause();
     setBusy(true);
     setError(null);
     try {
+      // Let the last few utterances finish transcribing first.
+      for (let i = 0; queued > 0 && i < 240; i++) await new Promise((r) => setTimeout(r, 250));
       const analysis = await analyze(useMeetings.getState().meetings.find((m) => m.id === meeting.id)!);
       update(meeting.id, { analysis, title: meeting.title || analysis.title });
       setShowTranscript(false);
@@ -188,25 +258,50 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
 
       {/* Recorder */}
       <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
+          <Segmented
+            layoutId={`capture-${meeting.id}`}
+            value={mode}
+            onChange={(m) => !listening && setMode(m)}
+            options={[
+              { value: "mic", label: <><Mic className="size-3.5" /> Microphone</> },
+              { value: "meeting", label: <><Headphones className="size-3.5" /> Headphones</> },
+            ]}
+          />
+          <span className="text-[12px] text-muted">
+            {mode === "mic"
+              ? "Hears everyone in the room. On a call, use speakers so the other side is picked up."
+              : "Hears you and the meeting's own sound — works with headphones. Labels who spoke."}
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-4 p-5">
           <button
             onClick={toggle}
-            aria-label={speech.listening ? "Pause listening" : "Start listening"}
+            disabled={!!starting}
+            aria-label={listening ? "Pause listening" : "Start listening"}
             className={cn(
-              "relative flex size-14 shrink-0 items-center justify-center rounded-full text-white shadow-card transition-transform active:scale-95",
-              speech.listening ? "bg-neg" : "bg-primary text-on-primary",
+              "relative flex size-14 shrink-0 items-center justify-center rounded-full text-white shadow-card transition-transform active:scale-95 disabled:opacity-60",
+              listening ? "bg-neg" : "bg-primary text-on-primary",
             )}
           >
-            {speech.listening && <motion.span className="absolute inset-0 rounded-full bg-neg" animate={{ scale: [1, 1.5], opacity: [0.5, 0] }} transition={{ duration: 1.4, repeat: Infinity }} />}
-            {speech.listening ? <Pause className="relative size-6" /> : <Mic className="relative size-6" />}
+            {listening && <motion.span className="absolute inset-0 rounded-full bg-neg" animate={{ scale: [1, 1.5], opacity: [0.5, 0] }} transition={{ duration: 1.4, repeat: Infinity }} />}
+            {listening ? <Pause className="relative size-6" /> : mode === "meeting" ? <Headphones className="relative size-6" /> : <Mic className="relative size-6" />}
           </button>
           <div className="min-w-0 flex-1">
-            <div className="font-serif text-3xl leading-none tabular">{clock(elapsed())}</div>
+            <div className="font-serif text-3xl leading-none tabular">{clock(listening ? elapsed() : meeting.recorded)}</div>
             <div className="mt-1 text-[13px] text-muted">
-              {speech.listening ? "Listening…" : meeting.segments.length ? `${meeting.segments.length} lines captured` : "Ready when you are"}
+              {starting ??
+                (capturing
+                  ? "Listening to you and the meeting…"
+                  : speech.listening
+                    ? "Listening…"
+                    : meeting.segments.length
+                      ? `${meeting.segments.length} lines captured`
+                      : "Ready when you are")}
+              {backlog > 0 && <span className="ml-2 text-faint">· transcribing {backlog}…</span>}
             </div>
           </div>
-          <Select value={meeting.language} onChange={(e) => (update(meeting.id, { language: e.target.value }), setLanguage(e.target.value))} disabled={speech.listening} className="h-10 w-40 text-[13px]" aria-label="Language">
+          <Select value={meeting.language} onChange={(e) => (update(meeting.id, { language: e.target.value }), setLanguage(e.target.value))} disabled={listening} className="h-10 w-40 text-[13px]" aria-label="Language">
             {LANGUAGES.map(([code, label]) => (
               <option key={code} value={code}>
                 {label}
@@ -234,13 +329,21 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
           />
         </div>
 
-        {(speech.error || !speechSupported()) && (
-          <div className="mx-5 mb-4 flex items-start gap-2 rounded-xl bg-neg/10 px-3.5 py-2.5 text-[13px] text-neg">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {speech.error ?? "Live transcription needs Chrome or Edge. You can still import or paste a transcript."}
-          </div>
-        )}
+        {(() => {
+          const problem =
+            mode === "meeting"
+              ? (captureError ?? (!meetingCaptureSupported() ? "Listening to meeting audio needs Chrome or Edge on a computer. You can still import or paste a transcript." : null))
+              : (speech.error ?? (!speechSupported() ? "Live transcription needs Chrome or Edge. You can still import or paste a transcript." : null));
+          return (
+            problem && (
+              <div className="mx-5 mb-4 flex items-start gap-2 rounded-xl bg-neg/10 px-3.5 py-2.5 text-[13px] text-neg">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {problem}
+              </div>
+            )
+          );
+        })()}
 
-        {(meeting.segments.length > 0 || speech.listening) && (
+        {(meeting.segments.length > 0 || listening) && (
           <div className="border-t border-line">
             {a && (
               <button onClick={() => setShowTranscript(!showTranscript)} className="w-full px-5 py-3 text-left text-[13px] font-medium text-muted hover:text-ink">
@@ -253,7 +356,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
                   <div key={i} className="flex gap-3 py-0.5">
                     <span className="w-12 shrink-0 pt-px text-right text-[12px] text-faint tabular">{clock(s.at)}</span>
                     <span>
-                      {s.speaker && <span className="font-medium">{s.speaker}: </span>}
+                      {s.speaker && <span className={cn("font-medium", s.speaker === "You" ? "text-cal" : s.speaker === "Them" ? "text-[#c0583f]" : undefined)}>{s.speaker}: </span>}
                       {s.text}
                     </span>
                   </div>
@@ -272,7 +375,18 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
 
         <div className="flex items-start gap-2 border-t border-line bg-sunken/40 px-5 py-3 text-[12px] leading-relaxed text-muted">
           <Info className="mt-0.5 size-3.5 shrink-0" />
-          Haven listens through this device's microphone — on a video call, use speakers rather than headphones so the other side is heard too. Or import the transcript your meeting app saves (Zoom, Meet and Teams export .vtt files).
+          {mode === "mic" ? (
+            <span>
+              Microphone mode uses the browser's speech recognition (in Chrome and Edge, the audio is transcribed by the browser's speech service). You can also import the
+              transcript your meeting app saves — Zoom, Meet and Teams export .vtt files.
+            </span>
+          ) : (
+            <span>
+              When you start, the browser asks what to share. For Meet or Teams in the browser, pick the meeting's tab and keep “Share tab audio” on. For the Zoom or Teams
+              app, pick “Entire screen” and turn on “Share system audio”. Only the sound is used, and it's transcribed on this device by an open-source speech model (a
+              one-time download of about 80 MB). Keep this page open while you listen.
+            </span>
+          )}
         </div>
       </Card>
 

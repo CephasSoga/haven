@@ -36,9 +36,13 @@ export function useSpeech(lang: string, onFinal: (text: string) => void) {
   const final = useRef(onFinal);
   final.current = onFinal;
 
-  const start = () => {
+  /** Returns false when listening couldn't even begin. */
+  const start = (): boolean => {
     const Ctor = ctor();
-    if (!Ctor) return setError("Live transcription needs Chrome or Edge. You can still import or paste a transcript.");
+    if (!Ctor) {
+      setError("Live transcription needs Chrome or Edge. You can still import or paste a transcript.");
+      return false;
+    }
     setError(null);
     const r = new Ctor();
     r.lang = lang;
@@ -77,8 +81,15 @@ export function useSpeech(lang: string, onFinal: (text: string) => void) {
     };
     wanted.current = true;
     rec.current = r;
-    r.start();
+    try {
+      r.start();
+    } catch {
+      wanted.current = false;
+      setError("Live transcription couldn't start. Reload the page and try again.");
+      return false;
+    }
     setListening(true);
+    return true;
   };
 
   const stop = () => {

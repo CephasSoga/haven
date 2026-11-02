@@ -288,6 +288,8 @@ export function Progress({ value, color, className }: { value: number; color: st
 
 /* ---------- Modal ---------- */
 
+const openModals: symbol[] = [];
+
 export function Modal({
   open,
   onClose,
@@ -295,6 +297,8 @@ export function Modal({
   children,
   footer,
   accent,
+  size = "md",
+  top = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -302,18 +306,28 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   accent?: string;
+  /** Compact width, for confirmations */
+  size?: "md" | "sm" | "lg";
+  /** Draw above other dialogs and overlays */
+  top?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const id = Symbol();
+    openModals.push(id);
+    // Only the topmost dialog answers Escape.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && openModals.at(-1) === id && onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      openModals.splice(openModals.indexOf(id), 1);
+    };
   }, [open, onClose]);
 
   return createPortal(
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
+        <div className={cn("fixed inset-0 flex items-end justify-center sm:items-center sm:p-6", top ? "z-[80]" : "z-50")}>
           <motion.div
             className="absolute inset-0 bg-black/30 backdrop-blur-[3px] dark:bg-black/60"
             initial={{ opacity: 0 }}
@@ -324,7 +338,7 @@ export function Modal({
           <motion.div
             role="dialog"
             aria-modal="true"
-            className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-line bg-surface shadow-float sm:max-w-lg sm:rounded-3xl"
+            className={cn("relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-line bg-surface shadow-float sm:rounded-3xl", size === "sm" ? "sm:max-w-sm" : size === "lg" ? "sm:max-w-3xl" : "sm:max-w-lg")}
             initial={{ opacity: 0, y: 24, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 16, scale: 0.98 }}

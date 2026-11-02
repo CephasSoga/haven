@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ask } from "@/components/confirm";
 import { Trash2 } from "lucide-react";
 import { Button, ColorPicker, Field, Input, Modal, Segmented, Select } from "@/components/ui";
 import { centsToInput, parseAmount } from "@/lib/money";
@@ -45,8 +46,8 @@ export function CategoryDialog({ draft, onClose }: { draft: CategoryDraft | null
           {f.id && !isFallback && (
             <Button
               variant="danger"
-              onClick={() => {
-                if (confirm(`Delete “${f.name}”? Its transactions move to “Other”.`)) {
+              onClick={async () => {
+                if (await ask({ title: `Delete “${f.name}”?`, body: "Its transactions will move to “Other”.", confirmLabel: "Delete", danger: true })) {
                   removeCategory(f.id!);
                   onClose();
                 }
@@ -150,8 +151,8 @@ export function AccountDialog({ draft, onClose }: { draft: AccountDraft | null; 
           {f.id && accounts.length > 1 && (
             <Button
               variant="danger"
-              onClick={() => {
-                if (confirm(`Delete “${f.name}” and all of its transactions? This can't be undone.`)) {
+              onClick={async () => {
+                if (await ask({ title: `Delete “${f.name}”?`, body: "The account and all of its transactions will be deleted. This can't be undone.", confirmLabel: "Delete", danger: true })) {
                   removeAccount(f.id!);
                   onClose();
                 }

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ask } from "@/components/confirm";
 import { useSearchParams } from "react-router";
 import { format, formatDistanceToNowStrict, isThisYear, isToday, isYesterday } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
@@ -141,8 +142,8 @@ export function NotesPage() {
                   note={selected}
                   onChange={(patch) => update(selected.id, patch)}
                   onBack={() => select(null)}
-                  onDelete={() => {
-                    if (isBlank(selected) || confirm(`Delete “${selected.title || "Untitled"}”?`)) {
+                  onDelete={async () => {
+                    if (isBlank(selected) || (await ask({ title: `Delete “${selected.title || "Untitled"}”?`, body: "This note will be deleted.", confirmLabel: "Delete", danger: true }))) {
                       remove(selected.id);
                       setParams({}, { replace: true });
                     }

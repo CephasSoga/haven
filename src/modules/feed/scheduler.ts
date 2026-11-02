@@ -10,10 +10,10 @@ export let progress = "";
 /** Prepares today's edition now (or joins one already in progress). */
 export function refreshFeed(onStep?: (s: string) => void) {
   inFlight ??= (async () => {
-    const { interests, perInterest, setRun, saveEdition } = useFeed.getState();
+    const { interests, topics, sources, region, showTop, aiBrief, perInterest, setRun, saveEdition } = useFeed.getState();
     setRun(true);
     try {
-      saveEdition(await gather(interests, perInterest, (s) => ((progress = s), onStep?.(s))));
+      saveEdition(await gather({ interests, topics, sources, region, showTop, aiBrief, perInterest }, (s) => ((progress = s), onStep?.(s))));
       setRun(false);
     } catch (e) {
       setRun(false, explain(e));
@@ -32,8 +32,8 @@ export function refreshFeed(onStep?: (s: string) => void) {
 export function useMorningScheduler() {
   useEffect(() => {
     const check = () => {
-      const { auto, interests, time, editions, running, error } = useFeed.getState();
-      if (!auto || !interests.length || running || error) return;
+      const { auto, interests, topics, sources, showTop, time, editions, running, error } = useFeed.getState();
+      if (!auto || (!interests.length && !topics.length && !sources.length && !showTop) || running || error) return;
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
       if (hhmm < time || editions.some((e) => e.date === todayKey())) return;

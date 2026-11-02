@@ -59,6 +59,8 @@ export type Meeting = {
 type MeetingsState = {
   meetings: Meeting[];
   language: string;
+  /** "mic": browser speech recognition on the microphone. "meeting": mic + shared meeting audio, transcribed locally */
+  mode: "mic" | "meeting";
   create: (patch?: Partial<Meeting>) => string;
   update: (id: string, patch: Partial<Meeting>) => void;
   addSegment: (id: string, seg: Segment) => void;
@@ -66,6 +68,7 @@ type MeetingsState = {
   patchEvent: (id: string, index: number, patch: Partial<ProposedEvent>) => void;
   remove: (id: string) => void;
   setLanguage: (lang: string) => void;
+  setMode: (mode: "mic" | "meeting") => void;
   replaceAll: (meetings: Meeting[]) => void;
 };
 
@@ -74,6 +77,7 @@ export const useMeetings = create<MeetingsState>()(
     (set, get) => ({
       meetings: [],
       language: navigator.language || "en-US",
+      mode: "mic",
       create: (patch) => {
         const m: Meeting = { id: uid(), title: "", startedAt: Date.now(), recorded: 0, language: get().language, segments: [], myNotes: "", ...patch };
         set((s) => ({ meetings: [m, ...s.meetings] }));
@@ -95,6 +99,7 @@ export const useMeetings = create<MeetingsState>()(
         })),
       remove: (id) => set((s) => ({ meetings: s.meetings.filter((m) => m.id !== id) })),
       setLanguage: (language) => set({ language }),
+      setMode: (mode) => set({ mode }),
       replaceAll: (meetings) => set({ meetings }),
     }),
     { name: "haven:meetings", version: 1 },

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { format } from "date-fns";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus, Wand2, X } from "lucide-react";
 import { Button, Card, CardHeader, Progress } from "@/components/ui";
 import { monthKey } from "@/lib/dates";
 import { useMoney } from "@/lib/money";
@@ -9,7 +9,7 @@ import { CategoryBadge } from "./parts";
 import { inMonth, spendByCategory, useFinance, type Category } from "./store";
 
 export function BudgetsTab({ month, onEdit }: { month: Date; onEdit: (c: Category | "new") => void }) {
-  const { categories, transactions } = useFinance();
+  const { categories, transactions, rules, removeRule } = useFinance();
   const money = useMoney();
   const spend = useMemo(() => spendByCategory(inMonth(transactions, monthKey(month))), [transactions, month]);
   const income = useMemo(() => {
@@ -97,6 +97,30 @@ export function BudgetsTab({ month, onEdit }: { month: Date; onEdit: (c: Categor
           ))}
         </ul>
       </Card>
+
+      {rules.length > 0 && (
+        <Card>
+          <CardHeader title="Import rules" subtitle="Learned from your corrections when importing statements" />
+          <ul className="p-3">
+            {[...rules]
+              .sort((a, b) => a.match.localeCompare(b.match))
+              .map((r) => {
+                const c = categories.find((x) => x.id === r.categoryId);
+                return (
+                  <li key={r.id} className="group flex items-center gap-3 rounded-2xl px-3 py-2 text-[14px] hover:bg-sunken">
+                    <Wand2 className="size-4 shrink-0 text-faint" />
+                    <span className="min-w-0 flex-1 truncate">
+                      Contains <span className="font-medium">“{r.match}”</span> → {c?.name ?? "Deleted category"}
+                    </span>
+                    <button onClick={() => removeRule(r.id)} aria-label={`Remove rule for ${r.match}`} className="rounded-lg p-1.5 text-faint opacity-0 hover:bg-surface hover:text-neg group-hover:opacity-100">
+                      <X className="size-4" />
+                    </button>
+                  </li>
+                );
+              })}
+          </ul>
+        </Card>
+      )}
     </div>
   );
 }

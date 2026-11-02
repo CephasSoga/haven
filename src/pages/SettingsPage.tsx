@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { ask } from "@/components/confirm";
 import { Check, Download, Eye, EyeOff, Monitor, Moon, Sparkles, Sun, Upload } from "lucide-react";
 import { Button, Card, Input, PageHeader, Segmented, Select } from "@/components/ui";
 import { sampleEvents, sampleFinances, sampleNotes, sampleTasks } from "@/lib/sample";
@@ -60,7 +61,7 @@ export function SettingsPage() {
       exportedAt: new Date().toISOString(),
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
       calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
-      finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions },
+      finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions, rules: finance.rules },
       notes: { notes: notes.notes },
       // Already encrypted — the backup never contains vault contents in the clear.
       vault: readVaultFile(),
@@ -82,13 +83,14 @@ export function SettingsPage() {
     try {
       const data = JSON.parse(await file.text());
       if (data.app !== "haven") throw new Error("Not a Haven backup");
-      if (!confirm("Replace everything in Haven with this backup?")) return;
+      if (!(await ask({ title: "Restore this backup?", body: "Everything in Haven will be replaced with the contents of the backup file.", confirmLabel: "Restore", danger: true }))) return;
       if (data.settings) settings.set(data.settings);
       calendar.replaceAll({ events: data.calendar?.events ?? [], tasks: data.calendar?.tasks ?? [], prefs: data.calendar?.prefs });
       finance.replaceAll({
         accounts: data.finances?.accounts ?? DEFAULT_ACCOUNTS,
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
         transactions: data.finances?.transactions ?? [],
+        rules: data.finances?.rules ?? [],
       });
       // Backups made while Notes used block pages hold `pages`; convert them back to notes.
       notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []));
@@ -174,8 +176,8 @@ export function SettingsPage() {
         </Row>
         <Row title="Sample data" hint="Fill Haven with realistic examples to explore">
           <Button
-            onClick={() => {
-              if (!confirm("Replace your calendar, finances and notes with sample data?")) return;
+            onClick={async () => {
+              if (!(await ask({ title: "Load sample data?", body: "Your calendar, finances and notes will be replaced with sample data.", confirmLabel: "Load samples", danger: true }))) return;
               finance.replaceAll(sampleFinances());
               calendar.replaceAll({ events: sampleEvents(new Date(), settings.weekStartsOn), tasks: sampleTasks() });
               notes.replaceAll(sampleNotes());
@@ -188,8 +190,8 @@ export function SettingsPage() {
         <Row title="Erase everything" hint="Deletes everything: calendar, finances, notes, your vault and your library">
           <Button
             variant="danger"
-            onClick={() => {
-              if (!confirm("Erase all of your Haven data? Export a backup first if you might want it back.")) return;
+            onClick={async () => {
+              if (!(await ask({ title: "Erase everything?", body: "All of your Haven data will be deleted from this browser, including your vault and library. Export a backup first if you might want it back.", confirmLabel: "Erase everything", danger: true }))) return;
               calendar.replaceAll({ events: [], tasks: [] });
               notes.replaceAll([]);
               vault.restore(null);

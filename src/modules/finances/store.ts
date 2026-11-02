@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { uid } from "@/lib/utils";
 import type { Cents } from "@/lib/money";
 import type { AccountKind } from "./icons";
+import type { Mapping } from "./importers";
 
 export type TxKind = "expense" | "income";
 
@@ -28,20 +29,32 @@ export type Transaction = {
   /** yyyy-MM-dd */
   date: string;
   note?: string;
+  /** Set on imported transactions: identifies the statement line, so it's never imported twice */
+  importKey?: string;
 };
+
+/** "Whenever a description contains this, file it under that category" */
+export type Rule = { id: string; match: string; categoryId: string };
 
 type Draft<T extends { id: string }> = Omit<T, "id"> & { id?: string };
 
 export type FinanceData = { accounts: Account[]; categories: Category[]; transactions: Transaction[] };
 
 type FinanceState = FinanceData & {
+  rules: Rule[];
+  /** Column layouts of CSV files seen before, keyed by their header line */
+  csvPresets: Record<string, Mapping>;
   saveTransaction: (t: Draft<Transaction>) => void;
+  addTransactions: (txs: Omit<Transaction, "id">[]) => void;
+  saveRule: (match: string, categoryId: string) => void;
+  removeRule: (id: string) => void;
+  savePreset: (signature: string, mapping: Mapping) => void;
   removeTransaction: (id: string) => void;
   saveAccount: (a: Draft<Account>) => void;
   removeAccount: (id: string) => void;
   saveCategory: (c: Draft<Category>) => void;
   removeCategory: (id: string) => void;
-  replaceAll: (data: FinanceData) => void;
+  replaceAll: (data: FinanceData & { rules?: Rule[] }) => void;
 };
 
 function upsert<T extends { id: string }>(list: T[], draft: Draft<T>): T[] {
@@ -76,7 +89,19 @@ export const useFinance = create<FinanceState>()(
       accounts: DEFAULT_ACCOUNTS,
       categories: DEFAULT_CATEGORIES,
       transactions: [],
+      rules: [],
+      csvPresets: {},
       saveTransaction: (t) => set((s) => ({ transactions: upsert(s.transactions, t) })),
+      addTransactions: (txs) => set((s) => ({ transactions: [...s.transactions, ...txs.map((t) => ({ ...t, id: uid() }))] })),
+      saveRule: (match, categoryId) =>
+        set((s) => {
+          const key = match.trim().toLowerCase();
+          if (!key) return {};
+          const others = s.rules.filter((r) => r.match !== key);
+          return { rules: [...others, { id: uid(), match: key, categoryId }] };
+        }),
+      removeRule: (id) => set((s) => ({ rules: s.rules.filter((r) => r.id !== id) })),
+      savePreset: (signature, mapping) => set((s) => ({ csvPresets: { ...s.csvPresets, [signature]: mapping } })),
       removeTransaction: (id) => set((s) => ({ transactions: s.transactions.filter((t) => t.id !== id) })),
       saveAccount: (a) => set((s) => ({ accounts: upsert(s.accounts, a) })),
       // Removing an account removes its transactions too; the UI confirms first.
@@ -96,9 +121,16 @@ export const useFinance = create<FinanceState>()(
             transactions: s.transactions.map((t) => (t.categoryId === id ? { ...t, categoryId: fallback } : t)),
           };
         }),
-      replaceAll: (data) => set(data),
+      replaceAll: ({ rules, ...data }) => set((s) => ({ ...data, rules: rules ?? s.rules })),
     }),
-    { name: "haven:finances", version: 1 },
+    {
+      name: "haven:finances",
+      version: 2,
+      migrate: (persisted, version) => {
+        const s = persisted as Partial<FinanceState>;
+        return version < 2 ? { ...s, rules: [], csvPresets: {} } : s;
+      },
+    },
   ),
 );
 

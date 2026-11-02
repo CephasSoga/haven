@@ -1,6 +1,7 @@
 import { Suspense, useEffect } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router";
 import { Shell } from "@/components/Shell";
+import { ConfirmHost } from "@/components/confirm";
 import { MODULES } from "@/modules/registry";
 import { TodayPage } from "@/pages/TodayPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -36,6 +37,7 @@ export function App() {
         </Routes>
         </Suspense>
       </Shell>
+      <ConfirmHost />
     </HashRouter>
   );
 }

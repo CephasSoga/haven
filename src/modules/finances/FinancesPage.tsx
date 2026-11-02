@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { addMonths, format, isSameMonth } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, FileUp, Plus } from "lucide-react";
 import { Button, IconButton, PageHeader, Segmented } from "@/components/ui";
-import { dayKey } from "@/lib/dates";
+import { dayKey, parseDay } from "@/lib/dates";
 import { useFinance, type Transaction } from "./store";
 import { Overview } from "./Overview";
 import { TransactionsTab } from "./TransactionsTab";
@@ -11,6 +11,7 @@ import { BudgetsTab } from "./BudgetsTab";
 import { AccountsTab } from "./AccountsTab";
 import { TransactionDialog, type TxDraft } from "./TransactionDialog";
 import { AccountDialog, CategoryDialog, type AccountDraft, type CategoryDraft } from "./dialogs";
+import { ImportDialog } from "./ImportDialog";
 
 type Tab = "overview" | "transactions" | "budgets" | "accounts";
 
@@ -21,6 +22,8 @@ export function FinancesPage() {
   const [txDraft, setTxDraft] = useState<TxDraft | null>(null);
   const [catDraft, setCatDraft] = useState<CategoryDraft | null>(null);
   const [accDraft, setAccDraft] = useState<AccountDraft | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [banner, setBanner] = useState<string | null>(null);
 
   const newTx = () => {
     const now = new Date();
@@ -64,6 +67,9 @@ export function FinancesPage() {
         actions={
           <>
             {monthNav}
+            <Button onClick={() => setImporting(true)}>
+              <FileUp className="size-4" /> Import
+            </Button>
             <Button variant="primary" onClick={newTx}>
               <Plus className="size-4" /> Transaction
             </Button>
@@ -110,6 +116,29 @@ export function FinancesPage() {
         </motion.div>
       </AnimatePresence>
 
+      <AnimatePresence>
+        {banner && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            className="fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-2xl bg-primary px-4 py-2.5 text-sm font-medium text-on-primary shadow-float md:bottom-8"
+          >
+            <Check className="size-4" /> {banner}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <ImportDialog
+        open={importing}
+        onClose={() => setImporting(false)}
+        onDone={({ count, latest }) => {
+          setTab("transactions");
+          if (latest) setMonth(parseDay(latest));
+          setBanner(`Imported ${count} ${count === 1 ? "transaction" : "transactions"}`);
+          setTimeout(() => setBanner(null), 3500);
+        }}
+      />
       <TransactionDialog draft={txDraft} onClose={() => setTxDraft(null)} />
       <CategoryDialog draft={catDraft} onClose={() => setCatDraft(null)} />
       <AccountDialog draft={accDraft} onClose={() => setAccDraft(null)} />
