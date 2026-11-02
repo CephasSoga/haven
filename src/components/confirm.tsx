@@ -13,6 +13,7 @@ type Request = {
   title: string;
   body?: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   danger?: boolean;
   resolve: (ok: boolean) => void;
 };
@@ -50,7 +51,7 @@ export function ConfirmHost() {
         <>
           <div className="flex-1" />
           <Button variant="ghost" onClick={() => answer(false)}>
-            Cancel
+            {shown?.cancelLabel ?? "Cancel"}
           </Button>
           <Button
             variant="primary"

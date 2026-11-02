@@ -5,6 +5,7 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Book as EpubBook, Rendition } from "epubjs";
 import { cn } from "@/lib/utils";
 import { getFile } from "./files";
+import { downloadBook } from "@/lib/sync";
 import { useLibrary, type Book } from "./store";
 
 type Paper = "paper" | "sepia" | "night";
@@ -28,7 +29,10 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
   const nav = useRef<Nav>({ prev: () => {}, next: () => {} });
 
   useEffect(() => {
-    getFile(book.id).then((b) => setBlob(b ?? null));
+    // Books added on another device are fetched from your account the first time they're opened here.
+    getFile(book.id)
+      .then(async (b) => b ?? (await downloadBook(book.id)) ?? null)
+      .then(setBlob);
     update(book.id, { lastOpenedAt: Date.now(), status: book.status === "to-read" ? "reading" : book.status });
     // Count reading time in 15-second ticks while the reader is visible.
     const t = setInterval(() => document.visibilityState === "visible" && addReadingTime(book.id, 15), 15_000);

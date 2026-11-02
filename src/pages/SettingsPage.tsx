@@ -14,6 +14,10 @@ import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/ai";
+import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
+import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
+import { formatDistanceToNowStrict } from "date-fns";
+import { CloudCheck, CloudOff, LogOut, RefreshCw } from "lucide-react";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
 
@@ -112,6 +116,8 @@ export function SettingsPage() {
     <div className="flex max-w-3xl flex-col gap-8">
       <PageHeader eyebrow="Haven" title="Settings" />
 
+      {cloudEnabled && <AccountSection />}
+
       <Section title="You">
         <Row title="Your name" hint="Used to greet you on the Today page">
           <Input value={settings.name} onChange={(e) => settings.set({ name: e.target.value })} placeholder="Your name" className="sm:w-60" />
@@ -191,7 +197,7 @@ export function SettingsPage() {
             Load samples
           </Button>
         </Row>
-        <Row title="Erase everything" hint="Deletes everything: calendar, finances, notes, your vault and your library">
+        <Row title="Erase everything" hint={cloudEnabled ? "Deletes everything — calendar, finances, notes, vault, library — from your account and all your devices" : "Deletes everything: calendar, finances, notes, your vault and your library"}>
           <Button
             variant="danger"
             onClick={async () => {
@@ -232,8 +238,8 @@ function AiSection() {
       <div className="flex gap-3 border-b border-line px-6 py-5 text-[13px] leading-relaxed text-muted">
         <Sparkles className="mt-0.5 size-4 shrink-0 text-cal" />
         <p>
-          The Morning feed and the Meeting assistant use Claude. Add your own Anthropic API key (from console.anthropic.com). It stays in this
-          browser and requests go straight to Anthropic; usage is billed to your Anthropic account — a morning edition is typically a few cents.
+          The Meeting assistant uses Claude, and the Morning feed can add a written overview with it. Add your own Anthropic API key (from console.anthropic.com). It stays in this
+          browser and requests go straight to Anthropic; usage is billed to your Anthropic account — a meeting summary is typically a few cents.
         </p>
       </div>
       <Row title="API key" hint={apiKey ? "Saved on this device" : "Not set"}>
@@ -286,6 +292,79 @@ function AiSection() {
             </option>
           ))}
         </Select>
+      </Row>
+    </Section>
+  );
+}
+
+function AccountSection() {
+  const account = useAuth((s) => s.account);
+  const sync = useSync();
+  const [pw, setPw] = useState("");
+  const [pwState, setPwState] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!account) return null;
+
+  const status =
+    sync.phase === "syncing"
+      ? { icon: <RefreshCw className="size-4 animate-spin" />, text: "Syncing…", tone: "text-muted" }
+      : sync.phase === "offline"
+        ? { icon: <CloudOff className="size-4" />, text: "Offline — your changes will sync when you're back online", tone: "text-[#b7791f]" }
+        : sync.phase === "error"
+          ? { icon: <CloudOff className="size-4" />, text: `Couldn't sync${sync.message ? `: ${sync.message}` : ""}. Haven will keep trying.`, tone: "text-neg" }
+          : { icon: <CloudCheck className="size-4" />, text: sync.lastSync ? `Everything is synced · ${formatDistanceToNowStrict(sync.lastSync, { addSuffix: true })}` : "Everything is synced", tone: "text-pos" };
+
+  return (
+    <Section title="Account">
+      <div className="flex items-center gap-4 border-b border-line px-6 py-5">
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#7c6cff] to-[#1f9e85] font-serif text-2xl text-white">
+          {(account.name || account.email).slice(0, 1).toUpperCase()}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{account.name || "Signed in"}</div>
+          <div className="truncate text-[13px] text-muted">{account.email}</div>
+        </div>
+      </div>
+      <Row title="Sync" hint="Your data follows you to every device you sign in on">
+        <div className="flex items-center gap-3">
+          <span className={`flex items-center gap-1.5 text-[13px] ${status.tone}`}>
+            {status.icon} {status.text}
+          </span>
+          <Button size="sm" onClick={() => void syncNow()} disabled={sync.phase === "syncing"}>
+            Sync now
+          </Button>
+        </div>
+      </Row>
+      <Row title="Password">
+        <form
+          className="flex gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await changePassword(pw);
+              setPw("");
+              setPwState({ ok: true, text: "Password changed" });
+            } catch (err) {
+              setPwState({ ok: false, text: err instanceof AuthProblem ? err.message : String(err) });
+            }
+          }}
+        >
+          <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password (8+ characters)" autoComplete="new-password" className="sm:w-60" />
+          <Button type="submit" disabled={pw.length < 8}>
+            Change
+          </Button>
+        </form>
+        {pwState && <div className={`mt-2 text-[13px] ${pwState.ok ? "text-pos" : "text-neg"}`}>{pwState.text}</div>}
+      </Row>
+      <Row title="Sign out" hint="Your data stays in your account; it's removed from this device until you sign in again">
+        <Button
+          onClick={async () => {
+            if (!(await ask({ title: "Sign out?", body: "Haven saves any pending changes to your account, then removes your data from this device. Sign in again to get it back.", confirmLabel: "Sign out" })))
+              return;
+            await signOutAndClear(endSession);
+          }}
+        >
+          <LogOut className="size-4" /> Sign out
+        </Button>
       </Row>
     </Section>
   );

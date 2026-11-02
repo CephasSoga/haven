@@ -3,12 +3,14 @@ import { ask } from "@/components/confirm";
 import { useSearchParams } from "react-router";
 import { formatDistanceToNowStrict } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { BookOpen, BookPlus, CheckCircle2, Clock, HardDrive, MoreHorizontal, Pencil, Search, Trash2, Upload } from "lucide-react";
+import { BookOpen, BookPlus, Check, CheckCircle2, Clock, Download, HardDrive, MoreHorizontal, Pencil, Search, Share2, Trash2, Upload } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { describe, formatOf } from "./extract";
 import { formatBytes, keepFiles, putFile, storageUsed } from "./files";
 import { Reader } from "./Reader";
+import { saveBookCopy, SHARE_MESSAGES, shareBook } from "./share";
+import { deleteBook, uploadBook } from "@/lib/sync";
 import { Cover, SPINES, spine } from "./Cover";
 import { formatReadingTime, useLibrary, type Book, type BookStatus } from "./store";
 
@@ -31,6 +33,26 @@ export function LibraryPage() {
   const open = (b: Book) => setParams({ read: b.id });
   const close = () => setParams({}, { replace: true });
 
+  const toast = (message: string | null) => {
+    if (!message) return;
+    setAdding(message);
+    setTimeout(() => setAdding(null), 3500);
+  };
+  const share = async (b: Book) => toast(SHARE_MESSAGES[await shareBook(b)]);
+  const saveCopy = async (b: Book) => toast(SHARE_MESSAGES[await saveBookCopy(b)]);
+  const deleteWithConfirm = async (b: Book) => {
+    const ok = await ask({
+      title: `Delete “${b.title}”?`,
+      body: "The book and your reading progress are removed from your library, on every device you're signed in on.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return false;
+    await remove(b.id);
+    await deleteBook(b.id).catch(() => {});
+    return true;
+  };
+
   useEffect(() => {
     storageUsed().then(setStorage);
   }, [books.length]);
@@ -42,12 +64,13 @@ export function LibraryPage() {
       setTimeout(() => setAdding(null), 3000);
       return;
     }
-    await keepFiles();
+    void keepFiles();
     for (const [i, file] of list.entries()) {
       setAdding(`Adding ${list.length > 1 ? `${i + 1} of ${list.length}` : file.name}…`);
       const book = await describe(file);
       await putFile(book.id, file);
       add(book);
+      void uploadBook(book.id, file).catch(() => {});
     }
     setAdding(null);
   };
@@ -195,7 +218,16 @@ export function LibraryPage() {
               <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
                 <AnimatePresence initial={false}>
                   {visible.map((b) => (
-                    <BookTile key={b.id} book={b} onOpen={() => open(b)} onEdit={() => setEditing(b)} onStatus={(status) => update(b.id, { status, finishedAt: status === "finished" ? Date.now() : undefined, progress: status === "finished" ? 1 : b.progress })} onRemove={async () => (await ask({ title: `Remove “${b.title}”?`, body: "The book and its reading progress will be removed from your library.", confirmLabel: "Remove", danger: true })) && remove(b.id)} />
+                    <BookTile
+                      key={b.id}
+                      book={b}
+                      onOpen={() => open(b)}
+                      onRename={() => setEditing(b)}
+                      onShare={() => void share(b)}
+                      onSave={() => void saveCopy(b)}
+                      onStatus={(status) => update(b.id, { status, finishedAt: status === "finished" ? Date.now() : undefined, progress: status === "finished" ? 1 : b.progress })}
+                      onDelete={() => void deleteWithConfirm(b)}
+                    />
                   ))}
                 </AnimatePresence>
               </div>
@@ -222,7 +254,7 @@ export function LibraryPage() {
       )}
 
       <AnimatePresence>{reading && <Reader key={reading.id} book={reading} onClose={close} />}</AnimatePresence>
-      <EditDialog book={editing} onClose={() => setEditing(null)} />
+      <EditDialog book={editing} onClose={() => setEditing(null)} onShare={(b) => void share(b)} onDelete={deleteWithConfirm} />
     </div>
   );
 }
@@ -237,46 +269,106 @@ function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; la
   );
 }
 
-function BookTile({ book, onOpen, onEdit, onStatus, onRemove }: { book: Book; onOpen: () => void; onEdit: () => void; onStatus: (s: BookStatus) => void; onRemove: () => void }) {
-  const [menu, setMenu] = useState(false);
+type TileActions = {
+  onOpen: () => void;
+  onRename: () => void;
+  onShare: () => void;
+  onSave: () => void;
+  onStatus: (s: BookStatus) => void;
+  onDelete: () => void;
+};
+
+function BookTile({ book, ...a }: { book: Book } & TileActions) {
+  const [menu, setMenu] = useState<"cover" | "title" | null>(null);
+  const close = () => setMenu(null);
+  const items = (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      className={cn("absolute z-40 w-52 rounded-2xl border border-line bg-raised p-1.5 shadow-float", menu === "cover" ? "left-2 top-11" : "right-0 top-full mt-1")}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <MenuItem onClick={() => (a.onRename(), close())}>
+        <Pencil className="size-3.5" /> Rename…
+      </MenuItem>
+      <MenuItem onClick={() => (a.onShare(), close())}>
+        <Share2 className="size-3.5" /> Share…
+      </MenuItem>
+      <MenuItem onClick={() => (a.onSave(), close())}>
+        <Download className="size-3.5" /> Save a copy
+      </MenuItem>
+      <div className="my-1 h-px bg-line" />
+      {(Object.keys(STATUS_LABEL) as BookStatus[]).map((st) => (
+        <MenuItem key={st} onClick={() => (a.onStatus(st), close())} active={book.status === st}>
+          <span className="flex size-3.5 items-center justify-center">{book.status === st && <Check className="size-3.5" />}</span>
+          {STATUS_LABEL[st]}
+        </MenuItem>
+      ))}
+      <div className="my-1 h-px bg-line" />
+      <MenuItem onClick={() => (a.onDelete(), close())} danger>
+        <Trash2 className="size-3.5" /> Delete
+      </MenuItem>
+    </motion.div>
+  );
+  const backdrop = <div className="fixed inset-0 z-30" onClick={close} onContextMenu={(e) => (e.preventDefault(), close())} />;
+
   return (
-    <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }} className="group relative flex flex-col">
-      <button onClick={onOpen} className="relative transition-transform duration-300 group-hover:-translate-y-1.5" aria-label={`Open ${book.title}`}>
-        <Cover book={book} className="group-hover:shadow-float" />
-        {book.status === "finished" && (
-          <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-white/90 text-pos shadow-soft">
-            <CheckCircle2 className="size-4" />
-          </span>
-        )}
-        <span className="absolute bottom-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur">{book.format}</span>
-      </button>
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className="group relative flex flex-col"
+      // Right-click on a computer, long-press on a phone.
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu("cover");
+      }}
+    >
+      <div className="relative">
+        <button onClick={a.onOpen} className="relative block w-full transition-transform duration-300 group-hover:-translate-y-1.5" aria-label={`Open ${book.title}`}>
+          <Cover book={book} className="group-hover:shadow-float" />
+          {book.status === "finished" && (
+            <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-white/90 text-pos shadow-soft">
+              <CheckCircle2 className="size-4" />
+            </span>
+          )}
+          <span className="absolute bottom-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur">{book.format}</span>
+        </button>
+        <button
+          onClick={() => setMenu(menu ? null : "cover")}
+          aria-label={`Options for ${book.title}`}
+          className={cn(
+            "absolute left-2 top-2 flex size-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition-all hover:bg-black/70 group-hover:-translate-y-1.5",
+            menu === "cover" ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100",
+          )}
+        >
+          <MoreHorizontal className="size-4" />
+        </button>
+        <AnimatePresence>
+          {menu === "cover" && (
+            <>
+              {backdrop}
+              {items}
+            </>
+          )}
+        </AnimatePresence>
+      </div>
       <div className="mt-3 flex items-start gap-1">
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 text-[14px] font-medium leading-snug">{book.title}</div>
           <div className="truncate text-[12px] text-muted">{book.author || STATUS_LABEL[book.status]}</div>
         </div>
         <div className="relative">
-          <button onClick={() => setMenu(!menu)} aria-label="Book options" className="rounded-lg p-1 text-faint hover:bg-sunken hover:text-ink">
+          <button onClick={() => setMenu(menu ? null : "title")} aria-label="Book options" className="rounded-lg p-1 text-faint hover:bg-sunken hover:text-ink">
             <MoreHorizontal className="size-4" />
           </button>
           <AnimatePresence>
-            {menu && (
+            {menu === "title" && (
               <>
-                <div className="fixed inset-0 z-30" onClick={() => setMenu(false)} />
-                <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute right-0 z-40 mt-1 w-48 rounded-2xl border border-line bg-raised p-1.5 shadow-float">
-                  {(Object.keys(STATUS_LABEL) as BookStatus[]).map((s) => (
-                    <MenuItem key={s} onClick={() => (onStatus(s), setMenu(false))} active={book.status === s}>
-                      Mark as {STATUS_LABEL[s].toLowerCase()}
-                    </MenuItem>
-                  ))}
-                  <div className="my-1 h-px bg-line" />
-                  <MenuItem onClick={() => (onEdit(), setMenu(false))}>
-                    <Pencil className="size-3.5" /> Edit details
-                  </MenuItem>
-                  <MenuItem onClick={() => (onRemove(), setMenu(false))} danger>
-                    <Trash2 className="size-3.5" /> Remove
-                  </MenuItem>
-                </motion.div>
+                {backdrop}
+                {items}
               </>
             )}
           </AnimatePresence>
@@ -306,7 +398,7 @@ function MenuItem({ children, onClick, active, danger }: { children: React.React
   );
 }
 
-function EditDialog({ book, onClose }: { book: Book | null; onClose: () => void }) {
+function EditDialog({ book, onClose, onShare, onDelete }: { book: Book | null; onClose: () => void; onShare: (b: Book) => void; onDelete: (b: Book) => Promise<boolean> }) {
   const update = useLibrary((s) => s.update);
   const [form, setForm] = useState<Book | null>(book);
   const [prev, setPrev] = useState(book);
@@ -320,9 +412,15 @@ function EditDialog({ book, onClose }: { book: Book | null; onClose: () => void 
     <Modal
       open={!!book}
       onClose={onClose}
-      title="Book details"
+      title="Edit book"
       footer={
         <>
+          <Button variant="danger" onClick={async () => (await onDelete(f)) && onClose()}>
+            <Trash2 className="size-4" /> Delete
+          </Button>
+          <Button variant="ghost" onClick={() => onShare(f)}>
+            <Share2 className="size-4" /> Share
+          </Button>
           <div className="flex-1" />
           <Button variant="ghost" onClick={onClose}>
             Cancel
@@ -345,7 +443,7 @@ function EditDialog({ book, onClose }: { book: Book | null; onClose: () => void 
           <Cover book={f} />
         </div>
         <div className="flex flex-1 flex-col gap-4">
-          <Field label="Title">{(id) => <Input id={id} value={f.title} onChange={(e) => setForm({ ...f, title: e.target.value })} />}</Field>
+          <Field label="Title">{(id) => <Input id={id} value={f.title} onChange={(e) => setForm({ ...f, title: e.target.value })} autoFocus onFocus={(e) => e.currentTarget.select()} />}</Field>
           <Field label="Author">{(id) => <Input id={id} value={f.author ?? ""} onChange={(e) => setForm({ ...f, author: e.target.value })} />}</Field>
           <Field label="Status">
             {(id) => (

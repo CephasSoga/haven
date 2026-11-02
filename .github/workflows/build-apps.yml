@@ -135,7 +135,10 @@ jobs:
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-release-unsigned.apk" | head -1)
           echo "Unsigned APK: $APK"
           if [ -n "${KEYSTORE_B64:-}" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > haven.p12
+            # Secrets pasted from a terminal can pick up line breaks or a trailing newline — drop them.
+            KEYSTORE_PASSWORD=$(printf '%s' "${KEYSTORE_PASSWORD:-}" | tr -d '\r\n')
+            printf '%s' "$KEYSTORE_B64" | tr -d '\r\n\t ' | base64 -d > haven.p12
+            echo "Signing key: $(stat -c %s haven.p12) bytes, password ${#KEYSTORE_PASSWORD} characters"
           else
             # Without the repository's signing key the app still installs, but a later build
             # signed with a different key can't update it in place.
@@ -145,7 +148,13 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Haven"
           fi
           # Fail with a clear message if the key can't be opened (wrong password or unreadable format).
-          keytool -list -keystore haven.p12 -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" > /dev/null             || { echo "::error::The Android signing key couldn't be opened — check ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD."; exit 1; }
+          if ! keytool -list -keystore haven.p12 -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" > keytool.log 2>&1; then
+            grep -iE "error|exception" keytool.log | head -3 || true
+            echo "::error::The Android signing key couldn't be opened — check ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+          # The key must be stored under the alias the signing step uses.
+          grep -q "^haven," keytool.log || { echo "::error::The signing key has no entry named 'haven'."; grep -E "^[^ ]+, " keytool.log | cut -d, -f1; exit 1; }
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           mkdir -p out
@@ -184,5 +193,5 @@ jobs:
             - **Windows:** download the `.exe` and run it. Windows may say it "protected your PC" because the installer isn't code-signed — choose *More info → Run anyway*.
             - **Android:** download the `.apk` on your phone and open it. Allow installing from your browser when asked.
 
-            Your data stays on each device. Move it between them with Settings → Export / Import.
+            Sign in with your Haven account and your data follows you between devices.
           files: dist/*

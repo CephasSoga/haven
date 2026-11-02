@@ -58,13 +58,16 @@ async function describePdf(file: File, base: Book): Promise<Book> {
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvas, viewport }).promise;
+    // PDF.js draws on animation frames, which stop while the window is hidden — don't let the cover hold up adding the book.
+    const task = page.render({ canvas, viewport });
+    const drawn = await Promise.race([task.promise.then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 8000))]).catch(() => false);
+    if (!drawn) task.cancel();
     return {
       ...base,
       title: info.Title?.trim() || base.title,
       author: info.Author?.trim() || undefined,
       pages: doc.numPages,
-      cover: await toCover(canvas),
+      cover: drawn ? await toCover(canvas) : undefined,
     };
   } finally {
     await doc.loadingTask.destroy();
