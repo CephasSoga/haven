@@ -2,6 +2,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { create } from "zustand";
 import { ask } from "@/components/confirm";
 import { supabase, type Account } from "@/lib/cloud";
+import { showNotice } from "@/lib/notices";
 import { useSettings } from "@/store/settings";
 import { useCalendar } from "@/modules/calendar/store";
 import { useFinance } from "@/modules/finances/store";
@@ -279,18 +280,50 @@ export async function signOutAndClear(endSession: () => Promise<void>) {
 
 const bookPath = (id: string) => `${account!.id}/${id}`;
 
-export async function uploadBook(id: string, file: Blob) {
-  if (!supabase || !account) return;
-  await supabase.storage.from("books").upload(bookPath(id), file, { upsert: true, contentType: file.type || "application/octet-stream" });
+/** Why a book's file didn't reach, or couldn't be fetched from, your account. */
+export class BookTransferError extends Error {
+  constructor(
+    public reason: "too-large" | "offline" | "not-in-account" | "failed",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
-/** Fetches a book's file from the account when this device doesn't have it yet. */
+const describeStorageError = (error: { message?: string; statusCode?: string | number }, verb: "upload" | "download") => {
+  const status = String((error as { statusCode?: unknown }).statusCode ?? (error as { status?: unknown }).status ?? "");
+  if (!navigator.onLine) return new BookTransferError("offline", "You're offline.");
+  if (status === "413" || /maximum allowed size|too large|payload/i.test(error.message ?? ""))
+    return new BookTransferError("too-large", "The file is larger than your account allows for one book.");
+  if (verb === "download" && (status === "404" || status === "400" || /not.?found/i.test(error.message ?? "")))
+    return new BookTransferError("not-in-account", "This book's file never reached your account.");
+  return new BookTransferError("failed", error.message || `The ${verb} didn't go through.`);
+};
+
+/** Saves a book's file to your account so your other devices can open it. Throws a BookTransferError if it can't. */
+export async function uploadBook(id: string, file: Blob) {
+  if (!supabase || !account) return;
+  let result;
+  try {
+    result = await supabase.storage.from("books").upload(bookPath(id), file, { upsert: true, contentType: file.type || "application/octet-stream" });
+  } catch (e) {
+    throw describeStorageError({ message: e instanceof Error ? e.message : String(e) }, "upload");
+  }
+  if (result.error) throw describeStorageError(result.error, "upload");
+}
+
+/** Fetches a book's file from the account when this device doesn't have it yet. Throws a BookTransferError if it can't. */
 export async function downloadBook(id: string): Promise<Blob | undefined> {
   if (!supabase || !account) return undefined;
-  const { data, error } = await supabase.storage.from("books").download(bookPath(id));
-  if (error || !data) return undefined;
-  await putFile(id, data);
-  return data;
+  let result;
+  try {
+    result = await supabase.storage.from("books").download(bookPath(id));
+  } catch (e) {
+    throw describeStorageError({ message: e instanceof Error ? e.message : String(e) }, "download");
+  }
+  if (result.error || !result.data) throw describeStorageError(result.error ?? {}, "download");
+  await putFile(id, result.data);
+  return result.data;
 }
 
 export async function deleteBook(id: string) {
@@ -299,8 +332,21 @@ export async function deleteBook(id: string) {
 }
 
 async function uploadAllBooks() {
+  const tooLarge: string[] = [];
   for (const b of useLibrary.getState().books) {
     const file = await getFile(b.id).catch(() => undefined);
-    if (file) await uploadBook(b.id, file).catch(() => {});
+    if (file) await uploadBook(b.id, file).catch((e) => e instanceof BookTransferError && e.reason === "too-large" && tooLarge.push(b.title));
   }
+  if (tooLarge.length) bookTooLarge(tooLarge);
+}
+
+/** Books that are too big for the account stay on this device only — say so once, by name. */
+export function bookTooLarge(titles: string[]) {
+  showNotice({
+    id: `too-large:${titles.join("|")}`,
+    tone: "warning",
+    title: titles.length === 1 ? `“${titles[0]}” is too large to sync` : `${titles.length} books are too large to sync`,
+    body: `${titles.length === 1 ? "It's" : `${titles.join(", ")} are`} kept on this device and can be read here, but won't appear on your other devices.`,
+    sticky: true,
+  });
 }

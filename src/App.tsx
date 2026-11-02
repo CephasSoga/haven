@@ -1,5 +1,5 @@
-import { Suspense, useEffect } from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router";
+import { Suspense, useEffect, type ReactNode } from "react";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { Shell } from "@/components/Shell";
 import { ConfirmHost } from "@/components/confirm";
 import { MODULES } from "@/modules/registry";
@@ -9,6 +9,8 @@ import { applyTheme, useSettings } from "@/store/settings";
 import { useMorningScheduler } from "@/modules/feed/scheduler";
 import { useReminders } from "@/lib/notify";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { Notices } from "@/components/Notices";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
 import { startSync, stopSync } from "@/lib/sync";
 import { AuthScreen } from "@/pages/AuthScreen";
@@ -28,6 +30,14 @@ function useThemeSync() {
 }
 
 export function App() {
+  return (
+    <ErrorBoundary fullScreen>
+      <Root />
+    </ErrorBoundary>
+  );
+}
+
+function Root() {
   useThemeSync();
   const status = useAuth((s) => s.status);
   const account = useAuth((s) => s.account);
@@ -47,6 +57,7 @@ export function App() {
       <>
         <AuthScreen />
         <ConfirmHost />
+        <Notices />
       </>
     );
   return <Main />;
@@ -66,6 +77,7 @@ function Main() {
   return (
     <HashRouter>
       <Shell>
+        <PageBoundary>
         <Suspense fallback={<div className="h-[60dvh]" />}>
         <Routes>
           <Route path="/" element={<TodayPage />} />
@@ -76,9 +88,17 @@ function Main() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>
+        </PageBoundary>
       </Shell>
       <ConfirmHost />
       <UpdateBanner />
+      <Notices />
     </HashRouter>
   );
+}
+
+/** A crash on one page leaves the menu working, and clears when you go to another page. */
+function PageBoundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  return <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>;
 }

@@ -6,7 +6,7 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Book as EpubBook, Rendition } from "epubjs";
 import { cn } from "@/lib/utils";
 import { getFile } from "./files";
-import { downloadBook } from "@/lib/sync";
+import { BookTransferError, downloadBook } from "@/lib/sync";
 import { useLibrary, type Book } from "./store";
 
 type Paper = "paper" | "sepia" | "night";
@@ -25,15 +25,38 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
   const { update, setProgress, addReadingTime } = useLibrary();
   const live = useLibrary((s) => s.books.find((b) => b.id === book.id)) ?? book;
   const [blob, setBlob] = useState<Blob | null | undefined>(undefined);
+  // Why the book can't be shown, in words; and whether trying again could help.
+  const [problem, setProblem] = useState<{ text: string; retry?: boolean } | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [paper, setPaper] = useState<Paper>(() => (localStorage.getItem(PAPER_KEY) as Paper) || "paper");
   const [label, setLabel] = useState("");
   const nav = useRef<Nav>({ prev: () => {}, next: () => {} });
 
   useEffect(() => {
     // Books added on another device are fetched from your account the first time they're opened here.
+    setProblem(null);
+    setBlob(undefined);
     getFile(book.id)
+      .catch(() => undefined)
       .then(async (b) => b ?? (await downloadBook(book.id)) ?? null)
-      .then(setBlob);
+      .then((b) => {
+        setBlob(b);
+        if (!b) setProblem({ text: "This book's file isn't on this device. Delete it from the Library and add the file again." });
+      })
+      .catch((e) => {
+        setBlob(null);
+        const reason = e instanceof BookTransferError ? e.reason : "failed";
+        setProblem(
+          reason === "offline"
+            ? { text: "This book was added on another device and hasn't been downloaded here yet. Connect to the internet to open it.", retry: true }
+            : reason === "not-in-account"
+              ? { text: "This book was added on another device, but its file never reached your account — it may be too large to sync. Open it on that device, or add the file again here." }
+              : { text: `This book couldn't be downloaded from your account. ${e instanceof Error ? e.message : ""}`.trim(), retry: true },
+        );
+      });
+  }, [book.id, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     update(book.id, { lastOpenedAt: Date.now(), status: book.status === "to-read" ? "reading" : book.status });
     // Count reading time in 15-second ticks while the reader is visible.
     const t = setInterval(() => document.visibilityState === "visible" && addReadingTime(book.id, 15), 15_000);
@@ -102,10 +125,23 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
 
       {/* Page */}
       <div className="relative min-h-0 flex-1">
-        {blob === undefined && <Centered>Opening…</Centered>}
-        {blob === null && <Centered>This book's file is missing from this browser. Remove it and add it again.</Centered>}
-        {blob && live.format === "pdf" && <PdfView blob={blob} start={Number(book.location) || 1} night={paper === "night"} nav={nav} onProgress={onProgress} />}
-        {blob && live.format === "epub" && <EpubView blob={blob} start={book.location} theme={theme} nav={nav} onProgress={onProgress} />}
+        {blob === undefined && !problem && <Centered>Opening…</Centered>}
+        {problem && (
+          <Centered>
+            {problem.text}
+            {problem.retry && (
+              <button onClick={() => setAttempt((a) => a + 1)} className="mt-4 block w-full font-medium underline underline-offset-4">
+                Try again
+              </button>
+            )}
+          </Centered>
+        )}
+        {blob && !problem && live.format === "pdf" && (
+          <PdfView blob={blob} start={Number(book.location) || 1} night={paper === "night"} nav={nav} onProgress={onProgress} onFail={() => setProblem({ text: UNREADABLE.pdf })} />
+        )}
+        {blob && !problem && live.format === "epub" && (
+          <EpubView blob={blob} start={book.location} theme={theme} nav={nav} onProgress={onProgress} onFail={() => setProblem({ text: UNREADABLE.epub })} />
+        )}
 
         <button onClick={() => nav.current.prev()} aria-label="Previous page" className="group absolute inset-y-0 left-0 hidden w-16 items-center justify-center sm:flex">
           <span className="rounded-full p-2 opacity-25 transition-opacity group-hover:opacity-70" style={{ background: `${theme.fg}14` }}>
@@ -150,13 +186,22 @@ function PageButton({ label, onClick, fg, children }: { label: string; onClick: 
   );
 }
 
-function Centered({ children }: { children: string }) {
-  return <div className="absolute inset-0 flex items-center justify-center px-8 text-center text-[15px] opacity-60">{children}</div>;
+function Centered({ children }: { children: ReactNode }) {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center px-8 text-center text-[15px]">
+      <div className="max-w-md opacity-70">{children}</div>
+    </div>
+  );
 }
+
+const UNREADABLE = {
+  pdf: "This PDF couldn't be opened. The file may be damaged, or protected with a password.",
+  epub: "This EPUB couldn't be opened. The file may be damaged, or protected with DRM.",
+};
 
 /* ---------- PDF ---------- */
 
-function PdfView({ blob, start, night, nav, onProgress }: { blob: Blob; start: number; night: boolean; nav: MutableRefObject<Nav>; onProgress: Progress }) {
+function PdfView({ blob, start, night, nav, onProgress, onFail }: { blob: Blob; start: number; night: boolean; nav: MutableRefObject<Nav>; onProgress: Progress; onFail: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -173,7 +218,7 @@ function PdfView({ blob, start, night, nav, onProgress }: { blob: Blob; start: n
       loaded = await pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
       if (alive) setDoc(loaded);
       else loaded.loadingTask.destroy();
-    })();
+    })().catch(() => alive && onFail());
     return () => {
       alive = false;
       loaded?.loadingTask.destroy();
@@ -252,7 +297,21 @@ function PdfView({ blob, start, night, nav, onProgress }: { blob: Blob; start: n
 
 /* ---------- EPUB ---------- */
 
-function EpubView({ blob, start, theme, nav, onProgress }: { blob: Blob; start?: string; theme: { bg: string; fg: string }; nav: MutableRefObject<Nav>; onProgress: Progress }) {
+function EpubView({
+  blob,
+  start,
+  theme,
+  nav,
+  onProgress,
+  onFail,
+}: {
+  blob: Blob;
+  start?: string;
+  theme: { bg: string; fg: string };
+  nav: MutableRefObject<Nav>;
+  onProgress: Progress;
+  onFail: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const rendition = useRef<Rendition | null>(null);
   const report = useRef(onProgress);
@@ -261,6 +320,7 @@ function EpubView({ blob, start, theme, nav, onProgress }: { blob: Blob; start?:
   useEffect(() => {
     let book: EpubBook | null = null;
     let alive = true;
+    let shown = false;
     (async () => {
       const { default: ePub } = await import("epubjs");
       if (!alive || !host.current) return;
@@ -287,12 +347,16 @@ function EpubView({ blob, start, theme, nav, onProgress }: { blob: Blob; start?:
       });
       nav.current = { prev: () => r.prev(), next: () => r.next() };
       await r.display(start || undefined);
+      shown = true;
       // Book-wide percentages need a location map; build it in the background.
       await book.ready;
       await book.locations.generate(1600);
       located = true;
       if (alive) r.reportLocation();
-    })().catch(() => {});
+    })().catch(() => {
+      // Failing to open is worth saying; failing to build the page map afterwards only affects percentages.
+      if (alive && !shown) onFail();
+    });
     return () => {
       alive = false;
       book?.destroy();

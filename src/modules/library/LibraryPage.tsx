@@ -10,7 +10,25 @@ import { describe, formatOf } from "./extract";
 import { formatBytes, keepFiles, putFile, storageUsed } from "./files";
 import { Reader } from "./Reader";
 import { saveBookCopy, SHARE_MESSAGES, shareBook } from "./share";
-import { deleteBook, uploadBook } from "@/lib/sync";
+import { BookTransferError, bookTooLarge, deleteBook, uploadBook } from "@/lib/sync";
+import { isStorageFull, showNotice, STORAGE_FULL } from "@/lib/notices";
+
+/** Uploads a newly added book so your other devices get it, and says so when that doesn't work. */
+async function sendToAccount(book: Book, file: Blob) {
+  try {
+    await uploadBook(book.id, file);
+  } catch (e) {
+    if (e instanceof BookTransferError && e.reason === "too-large") return bookTooLarge([book.title]);
+    showNotice({
+      id: `upload:${book.id}`,
+      tone: "warning",
+      title: `“${book.title}” isn't on your other devices yet`,
+      body: `It's saved here, but couldn't be sent to your account. ${e instanceof Error ? e.message : ""}`.trim(),
+      action: { label: "Try again", run: () => void sendToAccount(book, file) },
+      sticky: true,
+    });
+  }
+}
 import { Cover, SPINES, spine } from "./Cover";
 import { formatReadingTime, useLibrary, type Book, type BookStatus } from "./store";
 
@@ -64,15 +82,30 @@ export function LibraryPage() {
       setTimeout(() => setAdding(null), 3000);
       return;
     }
+    const skipped = [...files].filter((f) => !formatOf(f));
+    if (skipped.length)
+      showNotice({ tone: "info", title: `${skipped.length === 1 ? `“${skipped[0].name}” wasn't` : `${skipped.length} files weren't`} added`, body: "Only PDF and EPUB books can be added." });
     void keepFiles();
-    for (const [i, file] of list.entries()) {
-      setAdding(`Adding ${list.length > 1 ? `${i + 1} of ${list.length}` : file.name}…`);
-      const book = await describe(file);
-      await putFile(book.id, file);
-      add(book);
-      void uploadBook(book.id, file).catch(() => {});
+    try {
+      for (const [i, file] of list.entries()) {
+        setAdding(`Adding ${list.length > 1 ? `${i + 1} of ${list.length}` : file.name}…`);
+        const book = await describe(file);
+        try {
+          await putFile(book.id, file);
+        } catch (e) {
+          if (isStorageFull(e)) {
+            showNotice({ ...STORAGE_FULL, body: `“${book.title}” (${formatBytes(file.size)}) didn't fit${i + 1 < list.length ? ", so the rest weren't added either" : ""}. Delete books you no longer need, then add it again.` });
+            break;
+          }
+          showNotice({ tone: "error", title: `Couldn't add “${book.title}”`, body: e instanceof Error ? e.message : String(e) });
+          continue;
+        }
+        add(book);
+        void sendToAccount(book, file);
+      }
+    } finally {
+      setAdding(null);
     }
-    setAdding(null);
   };
 
   const onDrop = (e: DragEvent) => {
