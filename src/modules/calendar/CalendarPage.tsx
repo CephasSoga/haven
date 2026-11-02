@@ -12,7 +12,7 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns";
-import { CalendarPlus, ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from "lucide-react";
+import { BarChart3, CalendarPlus, ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Button, IconButton, PageHeader, Segmented } from "@/components/ui";
 import { useSettings } from "@/store/settings";
@@ -25,6 +25,7 @@ import { TaskPanel } from "./TaskPanel";
 import { EventDialog } from "./EventDialog";
 import { TaskDialog, newTaskDraft } from "./TaskDialog";
 import { HoursDialog } from "./HoursDialog";
+import { TimeInsights } from "./TimeInsights";
 import { dueBlocks, mergeBlocks } from "./dues";
 import { useNavigate } from "react-router";
 import { formatMoney } from "@/lib/money";
@@ -43,6 +44,7 @@ export function CalendarPage() {
   const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [hoursOpen, setHoursOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [billDraft, setBillDraft] = useState<BillDraft | null>(null);
   const bills = useFinance((s) => s.bills);
   const subs = useSubscriptions((s) => s.subs);
@@ -154,6 +156,9 @@ export function CalendarPage() {
                 <ChevronRight className="size-4" />
               </IconButton>
             </div>
+            <IconButton label="Time insights" onClick={() => setInsightsOpen(true)} className="border border-line bg-surface shadow-soft">
+              <BarChart3 className="size-4" />
+            </IconButton>
             <IconButton label="Planning hours" onClick={() => setHoursOpen(true)} className="border border-line bg-surface shadow-soft">
               <SlidersHorizontal className="size-4" />
             </IconButton>
@@ -219,6 +224,7 @@ export function CalendarPage() {
       <EventDialog draft={eventDraft} onClose={() => setEventDraft(null)} />
       <TaskDialog draft={taskDraft} onClose={() => setTaskDraft(null)} />
       <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} />
+      <TimeInsights open={insightsOpen} onClose={() => setInsightsOpen(false)} cursor={cursor} weekStartsOn={weekStartsOn} />
       <BillDialog draft={billDraft} onClose={() => setBillDraft(null)} />
     </div>
   );
