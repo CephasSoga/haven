@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { motion } from "motion/react";
-import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Book as EpubBook, Rendition } from "epubjs";
 import { cn } from "@/lib/utils";
@@ -60,7 +61,8 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
   };
   const theme = PAPERS[paper];
 
-  return (
+  // Drawn straight into the page body, so nothing in the app's layout (like the sidebar) can sit on top of it.
+  return createPortal(
     <motion.div
       className="fixed inset-0 z-[60] flex flex-col"
       style={{ background: theme.bg, color: theme.fg }}
@@ -71,8 +73,14 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
     >
       {/* Top bar */}
       <div className="flex shrink-0 items-center gap-3 px-4 py-3 sm:px-6" style={{ borderBottom: `1px solid ${theme.fg}14` }}>
-        <button onClick={onClose} aria-label="Close reader" className="rounded-xl p-2 opacity-70 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/5">
-          <X className="size-5" />
+        <button
+          onClick={onClose}
+          aria-label="Back to library"
+          className="flex shrink-0 items-center gap-1 rounded-xl py-2 pl-1.5 pr-3 text-[14px] font-medium opacity-75 transition-opacity hover:opacity-100"
+          style={{ background: `${theme.fg}0d` }}
+        >
+          <ChevronLeft className="size-5" />
+          <span className="max-sm:hidden">Library</span>
         </button>
         <div className="min-w-0 flex-1">
           <div className="truncate font-serif text-xl leading-tight">{live.title}</div>
@@ -100,12 +108,12 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
         {blob && live.format === "epub" && <EpubView blob={blob} start={book.location} theme={theme} nav={nav} onProgress={onProgress} />}
 
         <button onClick={() => nav.current.prev()} aria-label="Previous page" className="group absolute inset-y-0 left-0 hidden w-16 items-center justify-center sm:flex">
-          <span className="rounded-full p-2 opacity-0 transition-opacity group-hover:opacity-60" style={{ background: `${theme.fg}14` }}>
+          <span className="rounded-full p-2 opacity-25 transition-opacity group-hover:opacity-70" style={{ background: `${theme.fg}14` }}>
             <ChevronLeft className="size-5" />
           </span>
         </button>
         <button onClick={() => nav.current.next()} aria-label="Next page" className="group absolute inset-y-0 right-0 hidden w-16 items-center justify-center sm:flex">
-          <span className="rounded-full p-2 opacity-0 transition-opacity group-hover:opacity-60" style={{ background: `${theme.fg}14` }}>
+          <span className="rounded-full p-2 opacity-25 transition-opacity group-hover:opacity-70" style={{ background: `${theme.fg}14` }}>
             <ChevronRight className="size-5" />
           </span>
         </button>
@@ -113,15 +121,32 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
 
       {/* Progress */}
       <div className="shrink-0 px-4 pb-4 pt-3 sm:px-6" style={{ borderTop: `1px solid ${theme.fg}14` }}>
-        <div className="mb-2 flex items-center justify-between text-[12px] tabular opacity-70">
-          <span>{label}</span>
-          <span>{Math.round(live.progress * 100)}% read</span>
+        <div className="mb-2 flex items-center justify-between gap-3 text-[12px] tabular">
+          <div className="flex items-center gap-1">
+            <PageButton label="Previous page" onClick={() => nav.current.prev()} fg={theme.fg}>
+              <ChevronLeft className="size-4" />
+            </PageButton>
+            <span className="min-w-24 text-center opacity-70">{label}</span>
+            <PageButton label="Next page" onClick={() => nav.current.next()} fg={theme.fg}>
+              <ChevronRight className="size-4" />
+            </PageButton>
+          </div>
+          <span className="opacity-70">{Math.round(live.progress * 100)}% read</span>
         </div>
         <div className="h-1 overflow-hidden rounded-full" style={{ background: `${theme.fg}1a` }}>
           <div className="h-full rounded-full bg-cal transition-[width] duration-300" style={{ width: `${live.progress * 100}%` }} />
         </div>
       </div>
-    </motion.div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+function PageButton({ label, onClick, fg, children }: { label: string; onClick: () => void; fg: string; children: ReactNode }) {
+  return (
+    <button onClick={onClick} aria-label={label} title={label} className="rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100" style={{ background: `${fg}0d` }}>
+      {children}
+    </button>
   );
 }
 
