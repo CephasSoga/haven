@@ -3,7 +3,7 @@ import { motion } from "motion/react";
 import { useMoney } from "@/lib/money";
 import { swatch } from "@/lib/utils";
 import { ACCOUNT_KINDS } from "./icons";
-import { accountBalance, useFinance, type Account } from "./store";
+import { accountBalance, touches, useFinance, type Account } from "./store";
 
 export function AccountsTab({ onEdit }: { onEdit: (a: Account | "new") => void }) {
   const { accounts, transactions } = useFinance();
@@ -15,7 +15,7 @@ export function AccountsTab({ onEdit }: { onEdit: (a: Account | "new") => void }
         const s = swatch(a.color);
         const kind = ACCOUNT_KINDS[a.kind] ?? ACCOUNT_KINDS.checking;
         const Icon = kind.icon;
-        const count = transactions.filter((t) => t.accountId === a.id).length;
+        const count = transactions.filter((t) => touches(t, a.id)).length;
         return (
           <motion.button
             key={a.id}

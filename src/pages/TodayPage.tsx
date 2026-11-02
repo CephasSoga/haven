@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { addDays, format, isTomorrow } from "date-fns";
 import { motion } from "motion/react";
-import { ArrowRight, CalendarPlus, ListPlus, Newspaper, NotebookPen, Pin, Plus, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarPlus, Check, ListPlus, Newspaper, NotebookPen, Pin, Plus, ReceiptText, Sparkles } from "lucide-react";
 import { Button, Card, CardHeader, Progress } from "@/components/ui";
 import { greeting, monthKey, parseDay, todayKey } from "@/lib/dates";
 import { useMoney } from "@/lib/money";
@@ -20,7 +20,8 @@ import { inMonth, sortTransactions, spendByCategory, totalBalance, totals, useFi
 import { compareNotes, preview, useNotes } from "@/modules/notes/store";
 import { useLibrary } from "@/modules/library/store";
 import { useFeed } from "@/modules/feed/store";
-import { upcoming as upcomingRenewals, useSubscriptions, whenLabel } from "@/modules/subscriptions/store";
+import { daysUntil, upcoming as upcomingRenewals, useSubscriptions, whenLabel } from "@/modules/subscriptions/store";
+import { dueLabel } from "@/modules/finances/BillsTab";
 import { Cover } from "@/modules/library/Cover";
 
 const rise = (i: number) => ({
@@ -42,6 +43,7 @@ export function TodayPage() {
   const books = useLibrary((s) => s.books);
   const subs = useSubscriptions((s) => s.subs);
   const renewing = upcomingRenewals(subs, 7);
+  const billsDue = [...fin.bills].filter((b) => daysUntil(b.due) <= 7).sort((a, b) => a.due.localeCompare(b.due));
   const edition = useFeed((s) => s.editions.find((e) => e.date === todayKey()));
   const headlines = edition ? [...edition.items].sort((a, b) => Number(!!b.lead) - Number(!!a.lead)).slice(0, 3) : [];
   const currentBook = books.filter((b) => b.status === "reading").sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0))[0];
@@ -306,17 +308,40 @@ export function TodayPage() {
             </div>
           </Card>
 
-          {renewing.length > 0 && (
+          {(renewing.length > 0 || billsDue.length > 0) && (
             <Card>
               <CardHeader
-                title={<span className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#d6589f]" /> Renewing soon</span>}
+                title={<span className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#d6589f]" /> {billsDue.length ? "Due this week" : "Renewing soon"}</span>}
                 action={
-                  <Link to="/subscriptions" className="flex items-center gap-1 text-[13px] font-medium text-[#d6589f] hover:underline">
-                    Subscriptions <ArrowRight className="size-3.5" />
+                  <Link to={billsDue.length ? "/finances" : "/subscriptions"} className="flex items-center gap-1 text-[13px] font-medium text-[#d6589f] hover:underline">
+                    {billsDue.length ? "Finances" : "Subscriptions"} <ArrowRight className="size-3.5" />
                   </Link>
                 }
               />
               <ul className="p-3">
+                {billsDue.slice(0, 4).map((b) => {
+                  const late = daysUntil(b.due) < 0;
+                  return (
+                    <li key={b.id} className="flex items-center gap-3 rounded-2xl px-3 py-2">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl" style={{ background: swatch(b.color).soft, color: swatch(b.color).fg }}>
+                        <ReceiptText className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{b.name}</span>
+                        <span className={`block text-[12px] ${late ? "font-medium text-neg" : "text-muted"}`}>{dueLabel(b.due)}</span>
+                      </span>
+                      <span className="font-medium tabular">{money(b.amount)}</span>
+                      <button
+                        onClick={() => fin.payBill(b.id)}
+                        aria-label={`Mark ${b.name} paid`}
+                        title="Mark paid"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line text-muted transition-colors hover:border-pos hover:bg-pos/10 hover:text-pos"
+                      >
+                        <Check className="size-4" />
+                      </button>
+                    </li>
+                  );
+                })}
                 {renewing.slice(0, 4).map(({ sub, date, kind }) => (
                   <li key={sub.id} className="flex items-center gap-3 rounded-2xl px-3 py-2">
                     <span className="flex size-9 shrink-0 items-center justify-center rounded-xl text-[16px]" style={{ background: swatch(sub.color).soft, color: swatch(sub.color).fg }}>

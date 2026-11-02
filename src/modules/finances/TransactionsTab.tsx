@@ -7,7 +7,7 @@ import { useMoney } from "@/lib/money";
 import { TxRow } from "./parts";
 import { inMonth, signed, sortTransactions, totals, useFinance, type Transaction } from "./store";
 
-type Filter = "all" | "expense" | "income";
+type Filter = "all" | "expense" | "income" | "transfer";
 
 function dayLabel(key: string) {
   const d = parseDay(key);
@@ -29,7 +29,7 @@ export function TransactionsTab({ month, onOpenTx }: { month: Date; onOpenTx: (t
     return sortTransactions(inMonth(transactions, monthKey(month))).filter((t) => {
       if (filter !== "all" && t.kind !== filter) return false;
       if (!q) return true;
-      const hay = `${t.note ?? ""} ${catById.get(t.categoryId)?.name ?? ""} ${accById.get(t.accountId)?.name ?? ""}`;
+      const hay = `${t.note ?? ""} ${t.kind === "transfer" ? "transfer" : catById.get(t.categoryId)?.name ?? ""} ${accById.get(t.accountId)?.name ?? ""} ${accById.get(t.toAccountId ?? "")?.name ?? ""}`;
       return hay.toLowerCase().includes(q);
     });
   }, [transactions, month, query, filter, catById, accById]);
@@ -41,6 +41,7 @@ export function TransactionsTab({ month, onOpenTx }: { month: Date; onOpenTx: (t
   }, [list]);
 
   const sum = totals(list);
+  const moved = list.reduce((s, t) => s + (t.kind === "transfer" ? t.amount : 0), 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -57,6 +58,7 @@ export function TransactionsTab({ month, onOpenTx }: { month: Date; onOpenTx: (t
             { value: "all", label: "All" },
             { value: "expense", label: "Expenses" },
             { value: "income", label: "Income" },
+            { value: "transfer", label: "Transfers" },
           ]}
         />
       </div>
@@ -72,6 +74,11 @@ export function TransactionsTab({ month, onOpenTx }: { month: Date; onOpenTx: (t
           <span>
             Out <span className="font-medium text-ink tabular">{money(sum.expense)}</span>
           </span>
+          {moved > 0 && (
+            <span>
+              Moved <span className="font-medium text-ink tabular">{money(moved)}</span>
+            </span>
+          )}
         </div>
       )}
 

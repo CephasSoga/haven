@@ -25,6 +25,12 @@ import { TaskPanel } from "./TaskPanel";
 import { EventDialog } from "./EventDialog";
 import { TaskDialog, newTaskDraft } from "./TaskDialog";
 import { HoursDialog } from "./HoursDialog";
+import { dueBlocks, mergeBlocks } from "./dues";
+import { useNavigate } from "react-router";
+import { formatMoney } from "@/lib/money";
+import { useFinance } from "@/modules/finances/store";
+import { useSubscriptions } from "@/modules/subscriptions/store";
+import { BillDialog, type BillDraft } from "@/modules/finances/BillsTab";
 
 type View = "day" | "week" | "month";
 
@@ -37,6 +43,11 @@ export function CalendarPage() {
   const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [hoursOpen, setHoursOpen] = useState(false);
+  const [billDraft, setBillDraft] = useState<BillDraft | null>(null);
+  const bills = useFinance((s) => s.bills);
+  const subs = useSubscriptions((s) => s.subs);
+  const currency = useSettings((s) => s.currency);
+  const navigate = useNavigate();
 
   const days = useMemo(() => {
     if (view === "day") return [cursor];
@@ -50,7 +61,10 @@ export function CalendarPage() {
     });
   }, [view, cursor, weekStartsOn]);
 
-  const blocks = useMemo(() => buildBlocks(days, events, tasks, plan), [days, events, tasks, plan]);
+  const blocks = useMemo(
+    () => mergeBlocks(buildBlocks(days, events, tasks, plan), dueBlocks(days, bills, subs, (c) => formatMoney(c, currency))),
+    [days, events, tasks, plan, bills, subs, currency],
+  );
 
   const step = (dir: 1 | -1) =>
     setCursor((c) => (view === "month" ? addMonths(c, dir) : view === "week" ? addWeeks(c, dir) : addDays(c, dir)));
@@ -60,7 +74,11 @@ export function CalendarPage() {
 
   const openTask = (t: Task) => setTaskDraft({ ...t });
   const openBlock = (b: Block) => {
-    if (b.kind === "event") {
+    if (b.kind === "bill") {
+      const bill = bills.find((x) => x.id === b.id);
+      if (bill) setBillDraft({ ...bill });
+    } else if (b.kind === "renewal") navigate("/subscriptions");
+    else if (b.kind === "event") {
       const e = events.find((x) => x.id === b.id);
       if (e) setEventDraft({ ...e });
     } else {
@@ -201,6 +219,7 @@ export function CalendarPage() {
       <EventDialog draft={eventDraft} onClose={() => setEventDraft(null)} />
       <TaskDialog draft={taskDraft} onClose={() => setTaskDraft(null)} />
       <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} />
+      <BillDialog draft={billDraft} onClose={() => setBillDraft(null)} />
     </div>
   );
 }

@@ -40,10 +40,10 @@ export function usePlan() {
   }, [tasks, events, prefs, now]);
 }
 
-/** Something drawn on the calendar: an event occurrence or a slice of a task. */
+/** Something drawn on the calendar: an event occurrence, a slice of a task, or a bill or subscription payment. */
 export type Block = {
   key: string;
-  kind: "event" | "task";
+  kind: "event" | "task" | "bill" | "renewal";
   id: string;
   title: string;
   date: string;
@@ -58,7 +58,12 @@ export type Block = {
   locked?: boolean;
   part?: number;
   parts?: number;
+  /** Bills and renewals: how much leaves that day */
+  amount?: number;
+  overdue?: boolean;
 };
+
+export const isMoney = (b: Block) => b.kind === "bill" || b.kind === "renewal";
 
 export function taskColor(t: Task) {
   return TASK_TYPES[t.type]?.color ?? "slate";

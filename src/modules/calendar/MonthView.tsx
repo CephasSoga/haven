@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import { eachDayOfInterval, endOfMonth, endOfWeek, format, isSameMonth, isToday, startOfMonth, startOfWeek } from "date-fns";
 import { cn, swatch } from "@/lib/utils";
 import { dayKey } from "@/lib/dates";
-import type { Block } from "./plan";
+import { isMoney, type Block } from "./plan";
+import { MoneyIcon } from "./MoneyIcon";
 import { formatTime } from "./store";
 
 const MAX_CHIPS = 3;
@@ -102,9 +103,11 @@ export function MonthView({
                         "flex w-full items-center gap-1.5 truncate rounded-md px-1.5 py-[3px] text-left text-[12px] leading-tight transition-transform hover:translate-x-0.5",
                         !inMonth && "opacity-60",
                         e.done && "line-through opacity-50",
+                        e.overdue && "text-neg",
                       )}
                       style={e.start ? undefined : { background: s.soft }}
                     >
+                      {isMoney(e) && <MoneyIcon block={e} />}
                       {e.start ? (
                         <span
                           className={e.kind === "task" ? "size-2 shrink-0 rounded-full border-[1.5px]" : "size-1.5 shrink-0 rounded-full"}

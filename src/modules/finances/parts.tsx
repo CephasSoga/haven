@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
+import { ArrowLeftRight } from "lucide-react";
 import { useMoney } from "@/lib/money";
 import { cn, swatch } from "@/lib/utils";
 import { categoryIcon } from "./icons";
-import { signed, type Account, type Category, type Transaction } from "./store";
+import { signed, useFinance, type Account, type Category, type Transaction } from "./store";
 
 export function CategoryBadge({ category, size = "md" }: { category?: Category; size?: "sm" | "md" }) {
   const Icon = categoryIcon(category?.icon ?? "");
@@ -29,6 +30,24 @@ export function TxRow({
   onClick: () => void;
 }) {
   const money = useMoney();
+  const accounts = useFinance((s) => s.accounts);
+  if (tx.kind === "transfer") {
+    const to = accounts.find((a) => a.id === tx.toAccountId);
+    return (
+      <button onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors hover:bg-sunken">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-sunken text-muted">
+          <ArrowLeftRight className="size-[18px]" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{tx.note || "Transfer"}</span>
+          <span className="block truncate text-[13px] text-muted">
+            {account?.name ?? "?"} → {to?.name ?? "?"}
+          </span>
+        </span>
+        <span className="font-medium text-muted tabular">{money(tx.amount)}</span>
+      </button>
+    );
+  }
   return (
     <button
       onClick={onClick}

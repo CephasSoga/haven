@@ -67,7 +67,7 @@ export function SettingsPage() {
       exportedAt: new Date().toISOString(),
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
       calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
-      finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions, rules: finance.rules },
+      finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions, rules: finance.rules, bills: finance.bills },
       notes: { notes: notes.notes },
       // Already encrypted — the backup never contains vault contents in the clear.
       vault: readVaultFile(),
@@ -98,6 +98,7 @@ export function SettingsPage() {
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
         transactions: data.finances?.transactions ?? [],
         rules: data.finances?.rules ?? [],
+        bills: data.finances?.bills ?? [],
       });
       // Backups made while Notes used block pages hold `pages`; convert them back to notes.
       notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []));

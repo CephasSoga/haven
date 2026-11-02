@@ -3,7 +3,8 @@ import { format, getDay, isToday } from "date-fns";
 import { AlertTriangle, Check, Lock, Repeat } from "lucide-react";
 import { cn, swatch } from "@/lib/utils";
 import { dayKey } from "@/lib/dates";
-import { useNow, type Block } from "./plan";
+import { isMoney, useNow, type Block } from "./plan";
+import { MoneyIcon } from "./MoneyIcon";
 import { PRIORITIES, formatTime, fromMinutes, toMinutes, type PlannerPrefs } from "./store";
 
 const HOUR = 60;
@@ -177,8 +178,14 @@ export function TimeGrid({
                 {(blocks.get(dayKey(d)) ?? [])
                   .filter((b) => !b.start)
                   .map((b) => (
-                    <button key={b.key} onClick={() => onOpen(b)} className="truncate rounded-md px-1.5 py-1 text-left text-[12px] font-medium" style={{ background: swatch(b.color).soft }}>
-                      {b.title}
+                    <button
+                      key={b.key}
+                      onClick={() => onOpen(b)}
+                      className={cn("flex items-center gap-1 truncate rounded-md px-1.5 py-1 text-left text-[12px] font-medium", b.overdue && "text-neg")}
+                      style={{ background: swatch(b.color).soft }}
+                    >
+                      {isMoney(b) && <MoneyIcon block={b} />}
+                      <span className="truncate">{b.title}</span>
                     </button>
                   ))}
               </div>

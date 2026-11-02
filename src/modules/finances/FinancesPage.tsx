@@ -12,8 +12,9 @@ import { AccountsTab } from "./AccountsTab";
 import { TransactionDialog, type TxDraft } from "./TransactionDialog";
 import { AccountDialog, CategoryDialog, type AccountDraft, type CategoryDraft } from "./dialogs";
 import { ImportDialog } from "./ImportDialog";
+import { BillDialog, BillsTab, type BillDraft } from "./BillsTab";
 
-type Tab = "overview" | "transactions" | "budgets" | "accounts";
+type Tab = "overview" | "transactions" | "budgets" | "bills" | "accounts";
 
 export function FinancesPage() {
   const { accounts, categories } = useFinance();
@@ -22,6 +23,7 @@ export function FinancesPage() {
   const [txDraft, setTxDraft] = useState<TxDraft | null>(null);
   const [catDraft, setCatDraft] = useState<CategoryDraft | null>(null);
   const [accDraft, setAccDraft] = useState<AccountDraft | null>(null);
+  const [billDraft, setBillDraft] = useState<BillDraft | null>(null);
   const [importing, setImporting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -37,7 +39,7 @@ export function FinancesPage() {
   };
   const openTx = (t: Transaction) => setTxDraft({ ...t });
 
-  const monthNav = tab !== "accounts" && (
+  const monthNav = tab !== "accounts" && tab !== "bills" && (
     <div className="flex items-center rounded-xl border border-line bg-surface shadow-soft">
       <IconButton label="Previous month" onClick={() => setMonth((m) => addMonths(m, -1))}>
         <ChevronLeft className="size-4" />
@@ -56,8 +58,8 @@ export function FinancesPage() {
       <PageHeader
         eyebrow="Finances"
         title={
-          tab === "accounts" ? (
-            "Accounts"
+          tab === "accounts" || tab === "bills" ? (
+            tab === "accounts" ? "Accounts" : "Bills"
           ) : (
             <>
               {format(month, "MMMM")} <span className="text-faint">{format(month, "yyyy")}</span>
@@ -77,18 +79,22 @@ export function FinancesPage() {
         }
       />
 
-      <Segmented
-        layoutId="fin-tab"
-        className="self-start"
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: "overview", label: "Overview" },
-          { value: "transactions", label: "Transactions" },
-          { value: "budgets", label: "Budgets" },
-          { value: "accounts", label: "Accounts" },
-        ]}
-      />
+      {/* On a phone the tabs are wider than the screen: let them scroll sideways instead of the page. */}
+      <div className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 [&::-webkit-scrollbar]:hidden sm:px-0">
+        <Segmented
+          layoutId="fin-tab"
+          className="whitespace-nowrap"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "overview", label: "Overview" },
+            { value: "transactions", label: "Transactions" },
+            { value: "budgets", label: "Budgets" },
+            { value: "bills", label: "Bills" },
+            { value: "accounts", label: "Accounts" },
+          ]}
+        />
+      </div>
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
@@ -108,6 +114,7 @@ export function FinancesPage() {
               }
             />
           )}
+          {tab === "bills" && <BillsTab onEdit={setBillDraft} />}
           {tab === "accounts" && (
             <AccountsTab
               onEdit={(a) => setAccDraft(a === "new" ? { name: "", kind: "checking", opening: 0, color: "teal" } : { ...a })}
@@ -142,6 +149,7 @@ export function FinancesPage() {
       <TransactionDialog draft={txDraft} onClose={() => setTxDraft(null)} />
       <CategoryDialog draft={catDraft} onClose={() => setCatDraft(null)} />
       <AccountDialog draft={accDraft} onClose={() => setAccDraft(null)} />
+      <BillDialog draft={billDraft} onClose={() => setBillDraft(null)} />
     </div>
   );
 }
