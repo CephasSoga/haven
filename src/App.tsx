@@ -7,6 +7,8 @@ import { TodayPage } from "@/pages/TodayPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { applyTheme, useSettings } from "@/store/settings";
 import { useMorningScheduler } from "@/modules/feed/scheduler";
+import { useReminders } from "@/lib/notify";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
 import { startSync, stopSync } from "@/lib/sync";
 import { AuthScreen } from "@/pages/AuthScreen";
@@ -60,6 +62,7 @@ function Splash() {
 
 function Main() {
   useMorningScheduler();
+  useReminders();
   return (
     <HashRouter>
       <Shell>
@@ -75,6 +78,7 @@ function Main() {
         </Suspense>
       </Shell>
       <ConfirmHost />
+      <UpdateBanner />
     </HashRouter>
   );
 }

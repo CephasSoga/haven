@@ -24,6 +24,10 @@ concurrency:
 env:
   VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
   VITE_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+  # Every build gets its own version, so installs and updates can tell builds apart
+  # (Android's version code is worked out from it, and must keep going up).
+  APP_VERSION: 0.2.${{ github.run_number }}
+  VITE_APP_VERSION: 0.2.${{ github.run_number }}
 
 jobs:
   windows:
@@ -45,20 +49,28 @@ jobs:
 
       - run: npm ci
 
+      - name: Stamp the version
+        shell: bash
+        run: node -e "const f='src-tauri/tauri.conf.json',c=require('./'+f);c.version=process.env.APP_VERSION;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+
       - name: Build the installer
+        env:
+          # Signs the update package, so installed copies only accept updates built here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --ci
 
       - name: Collect the installer
         shell: bash
         run: |
           mkdir -p out
-          cp src-tauri/target/release/bundle/nsis/*-setup.exe out/
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe src-tauri/target/release/bundle/nsis/*-setup.exe.sig out/
           ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
           name: haven-windows
-          path: out/*.exe
+          path: out/*
           if-no-files-found: error
 
   android:
@@ -100,20 +112,24 @@ jobs:
 
       - run: npm ci
 
+      - name: Stamp the version
+        shell: bash
+        run: node -e "const f='src-tauri/tauri.conf.json',c=require('./'+f);c.version=process.env.APP_VERSION;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+
       - name: Generate the Android project
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           npx tauri android init --ci
           npx tauri icon public/favicon.svg
-          # Meetings records from the microphone.
+          # Meetings records from the microphone; reminders are notifications set for an exact time.
           python3 - <<'PY'
           import re
           p = "src-tauri/gen/android/app/src/main/AndroidManifest.xml"
           s = open(p).read()
           extra = "".join(
               f'    <uses-permission android:name="android.permission.{name}" />\n'
-              for name in ("RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS")
+              for name in ("RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM", "RECEIVE_BOOT_COMPLETED")
               if f"android.permission.{name}" not in s
           )
           s = re.sub(r"(\s*<application)", "\n" + extra + r"\1", s, count=1)
@@ -181,17 +197,38 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # latest.json is what the Windows app's updater reads; version.json is for the Android app,
+      # which can't install updates itself and just needs to know where the new .apk is.
+      - name: Describe the release for the apps
+        env:
+          BASE: https://github.com/CephasSoga/haven/releases/download/v${{ env.APP_VERSION }}
+        run: |
+          set -euo pipefail
+          EXE=$(cd dist && ls *-setup.exe | head -1)
+          APK=$(cd dist && ls *.apk | head -1)
+          NOTES="Haven ${APP_VERSION}"
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n --arg v "$APP_VERSION" --arg n "$NOTES" --arg d "$DATE" --arg sig "$(cat "dist/$EXE.sig")" --arg url "$BASE/$EXE" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: {"windows-x86_64": {signature: $sig, url: $url}}}' > dist/latest.json
+          jq -n --arg v "$APP_VERSION" --arg n "$NOTES" --arg d "$DATE" --arg exe "$BASE/$EXE" --arg apk "$BASE/$APK" \
+            '{version: $v, notes: $n, date: $d, exe: $exe, apk: $apk}' > dist/version.json
+          rm "dist/$EXE.sig"
+          ls -la dist
+          cat dist/version.json
+
       - name: Publish a release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Haven {0}', github.ref_name) || format('Haven — build {0}', github.run_number) }}
+          tag_name: v${{ env.APP_VERSION }}
+          name: Haven ${{ env.APP_VERSION }}
           target_commitish: ${{ github.sha }}
+          # The installed apps look for updates in the latest release (latest.json, version.json).
+          make_latest: true
           body: |
             Installers for Haven, built from ${{ github.sha }}.
 
-            - **Windows:** download the `.exe` and run it. Windows may say it "protected your PC" because the installer isn't code-signed — choose *More info → Run anyway*.
-            - **Android:** download the `.apk` on your phone and open it. Allow installing from your browser when asked.
+            - **Windows:** download `Haven_${{ env.APP_VERSION }}_x64-setup.exe` and run it. Windows may say it "protected your PC" because the installer isn't code-signed — choose *More info → Run anyway*. Once installed, Haven updates itself.
+            - **Android:** download `Haven_${{ env.APP_VERSION }}.apk` on your phone and open it. Allow installing from your browser when asked. Haven tells you when there's a newer one.
 
             Sign in with your Haven account and your data follows you between devices.
           files: dist/*

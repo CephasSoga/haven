@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { ask } from "@/components/confirm";
 import { Check, Download, Eye, EyeOff, Monitor, Moon, Sparkles, Sun, Upload } from "lucide-react";
-import { Button, Card, Input, PageHeader, Segmented, Select } from "@/components/ui";
+import { Button, Card, Input, PageHeader, Segmented, Select, Switch } from "@/components/ui";
 import { sampleEvents, sampleFinances, sampleNotes, sampleTasks } from "@/lib/sample";
 import { useSettings, type Theme } from "@/store/settings";
 import { useCalendar } from "@/modules/calendar/store";
@@ -17,7 +17,11 @@ import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/a
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
 import { formatDistanceToNowStrict } from "date-fns";
-import { CloudCheck, CloudOff, LogOut, RefreshCw } from "lucide-react";
+import { BellRing, CloudCheck, CloudOff, LogOut, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
+import { askNotificationPermission, notificationPermission, notify, type Permission } from "@/lib/notify";
+import { APP_VERSION, inApp, onAndroid } from "@/lib/platform";
+import { RELEASES, canUpdate, checkForUpdate, installUpdate, useUpdates } from "@/lib/updates";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
 
@@ -125,6 +129,8 @@ export function SettingsPage() {
         </Row>
       </Section>
 
+      <RemindersSection />
+
       <AiSection />
 
       <Section title="Appearance">
@@ -219,6 +225,8 @@ export function SettingsPage() {
           </Button>
         </Row>
       </Section>
+
+      <AboutSection />
 
       {message && (
         <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-primary px-4 py-2.5 text-sm font-medium text-on-primary shadow-float md:bottom-8">
@@ -366,6 +374,125 @@ function AccountSection() {
         >
           <LogOut className="size-4" /> Sign out
         </Button>
+      </Row>
+    </Section>
+  );
+}
+
+const LEADS: { value: string; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "0", label: "When they start" },
+  { value: "5", label: "5 minutes before" },
+  { value: "10", label: "10 minutes before" },
+  { value: "15", label: "15 minutes before" },
+  { value: "30", label: "30 minutes before" },
+  { value: "60", label: "1 hour before" },
+];
+
+function RemindersSection() {
+  const prefs = useSettings((s) => s.reminders);
+  const set = useSettings((s) => s.set);
+  const [permission, setPermission] = useState<Permission | null>(null);
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    void notificationPermission().then(setPermission);
+  }, []);
+  const patch = (p: Partial<typeof prefs>) => set({ reminders: { ...prefs, ...p } });
+
+  const where = inApp
+    ? onAndroid
+      ? "Scheduled on your phone, so they arrive even when Haven is closed."
+      : "They arrive while Haven is open (it can stay minimized)."
+    : "They arrive while Haven is open in this browser.";
+
+  return (
+    <Section title="Reminders">
+      <Row
+        title="Notifications"
+        hint={
+          permission === "denied"
+            ? "Blocked. Allow notifications for Haven in your system or browser settings."
+            : permission === "unsupported"
+              ? "This browser can't show notifications."
+              : where
+        }
+      >
+        {permission === "granted" ? (
+          <Button
+            size="sm"
+            onClick={async () => {
+              await notify("Haven reminders are on", "This is what a reminder looks like.");
+              setSent(true);
+              setTimeout(() => setSent(false), 2500);
+            }}
+          >
+            {sent ? <Check className="size-4" /> : <BellRing className="size-4" />} {sent ? "Sent" : "Send a test"}
+          </Button>
+        ) : permission === "default" ? (
+          <Button size="sm" variant="primary" onClick={async () => setPermission(await askNotificationPermission())}>
+            <BellRing className="size-4" /> Allow notifications
+          </Button>
+        ) : null}
+      </Row>
+      <Row title="Events" hint="Calendar events with a start time">
+        <Select value={prefs.events === null ? "off" : String(prefs.events)} onChange={(e) => patch({ events: e.target.value === "off" ? null : Number(e.target.value) })} className="sm:w-52">
+          {LEADS.map((l) => (
+            <option key={l.value} value={l.value}>
+              {l.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      <Row title="Planned tasks" hint="When the planner has scheduled a task to start">
+        <Switch checked={prefs.tasks} onChange={(tasks) => patch({ tasks })} label={prefs.tasks ? "On" : "Off"} />
+      </Row>
+      <Row title="Bills" hint="At 9:00 on the day a bill is due">
+        <Switch checked={prefs.bills} onChange={(bills) => patch({ bills })} label={prefs.bills ? "On" : "Off"} />
+      </Row>
+      <Row title="Subscriptions" hint="At 9:00 the day before a renewal or the end of a free trial">
+        <Switch checked={prefs.subscriptions} onChange={(subscriptions) => patch({ subscriptions })} label={prefs.subscriptions ? "On" : "Off"} />
+      </Row>
+    </Section>
+  );
+}
+
+function AboutSection() {
+  const { phase, available, progress, message } = useUpdates();
+  const status =
+    phase === "checking"
+      ? "Checking…"
+      : phase === "current"
+        ? "You have the latest version"
+        : phase === "available" && available
+          ? `Haven ${available.version} is available`
+          : phase === "downloading"
+            ? `Downloading… ${Math.round(progress * 100)}%`
+            : phase === "error"
+              ? `Couldn't check: ${message}`
+              : inApp
+                ? onAndroid
+                  ? "Haven checks for new versions and lets you know"
+                  : "Haven checks for new versions and installs them when you say so"
+                : "Running in the browser — always the latest version";
+
+  return (
+    <Section title="About">
+      <Row title={`Haven ${APP_VERSION === "dev" ? "(local build)" : APP_VERSION}`} hint={status}>
+        {canUpdate ? (
+          phase === "available" ? (
+            <Button size="sm" variant="primary" onClick={() => void installUpdate()}>
+              <Download className="size-4" /> {onAndroid ? "Download" : "Update now"}
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => void checkForUpdate()} disabled={phase === "checking" || phase === "downloading"}>
+              <RefreshCw className={`size-4 ${phase === "checking" ? "animate-spin" : ""}`} /> Check for updates
+            </Button>
+          )
+        ) : (
+          <a href={RELEASES} target="_blank" rel="noreferrer" className="text-[13px] font-medium text-cal hover:underline">
+            Download the apps
+          </a>
+        )}
       </Row>
     </Section>
   );

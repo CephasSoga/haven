@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What Haven's window may do: the basics, plus fetching news feeds over the web.",
+  "description": "What Haven's window may do: the basics, fetching over the web (news feeds, update checks), reminders, opening links, and restarting after an update.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }]
-    }
+    },
+    "notification:default",
+    "opener:default",
+    "process:default"
   ]
 }
