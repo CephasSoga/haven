@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource/instrument-serif": "^5.3.0",
     "@huggingface/transformers": "^4.3.2",
+    "@supabase/supabase-js": "^2.118.0",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-http": "^2.8.3",
     "clsx": "^2.1.1",
