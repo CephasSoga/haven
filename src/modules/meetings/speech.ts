@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { inApp } from "@/lib/platform";
 
 /**
  * Live transcription with the browser's built-in speech recognition (Chrome and Edge).
@@ -25,7 +26,8 @@ function ctor(): RecognitionCtor | undefined {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition;
 }
 
-export const speechSupported = () => !!ctor();
+// Inside the installed apps the system web view has no speech service; on-device Whisper is used instead.
+export const speechSupported = () => !inApp && !!ctor();
 
 export function useSpeech(lang: string, onFinal: (text: string) => void) {
   const [listening, setListening] = useState(false);

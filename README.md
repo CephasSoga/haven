@@ -10,6 +10,15 @@ npm run dev        # http://localhost:5173
 npm run build      # type-check + production build into dist/
 ```
 
+## Installable apps (Windows .exe, Android .apk)
+
+The installers are built on GitHub's machines by `.github/workflows/build-apps.yml` (Tauri 2) — nothing needs to be installed locally. Run **Actions → Build apps → Run workflow** (or push a tag like `v0.2.0`); when it finishes, the `.exe` and `.apk` are attached to a new Release.
+
+- **Windows:** self-contained installer (bundles the WebView2 runtime), installs per user. It isn't code-signed, so SmartScreen asks once: *More info → Run anyway*.
+- **Android:** 64-bit ARM phones. Signed with the key stored in the repository secrets `ANDROID_KEYSTORE_B64` / `ANDROID_KEYSTORE_PASSWORD`, so new builds update the installed app without losing its data.
+- In the apps, the Morning feed fetches news natively (no local server), and Meetings transcribes on the device. Listening to meeting audio (Headphones mode) is desktop-only.
+- Each device keeps its own data; move it with Settings → Export / Import.
+
 ## Modules
 
 | Module    | What it does today |
@@ -61,6 +70,8 @@ src/
     feed/          interests store, news gathering (Claude + web search, Hacker News fallback), scheduler
     meetings/      meeting store, speech recognition, transcript import, Claude analysis → tasks/events/pages
   pages/           Today, Settings
+src-tauri/         desktop & Android app shell (Tauri 2)
+server/            local news fetcher used by the dev/preview server
   store/           app-wide settings
 ```
 

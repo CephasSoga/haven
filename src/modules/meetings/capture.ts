@@ -148,7 +148,7 @@ class Segmenter {
   }
 }
 
-export type CaptureLine = { at: number; text: string; speaker: "You" | "Them" };
+export type CaptureLine = { at: number; text: string; speaker?: "You" | "Them" };
 
 export class MeetingCapture {
   private ctx: AudioContext | null = null;
@@ -162,27 +162,33 @@ export class MeetingCapture {
       language: string;
       /** ms already recorded in this meeting, so timestamps continue */
       offset: number;
+      /** Also capture the meeting's own sound (headphones mode); otherwise the microphone only */
+      meetingAudio: boolean;
       onLine: (line: CaptureLine) => void;
       onEnded: (reason?: string) => void;
     },
   ) {}
 
   async start() {
-    // The browser asks which tab or screen to share; the meeting's sound comes with it.
-    const display = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true,
-      systemAudio: "include",
-    } as DisplayMediaStreamOptions);
-    const meetingTrack = display.getAudioTracks()[0];
-    if (!meetingTrack) {
-      display.getTracks().forEach((t) => t.stop());
-      throw new Error("No sound was shared. Share again and tick “Share tab audio” (or “Share system audio” for a whole screen).");
+    let display: MediaStream | null = null;
+    let meetingTrack: MediaStreamTrack | null = null;
+    if (this.opts.meetingAudio) {
+      // The browser asks which tab or screen to share; the meeting's sound comes with it.
+      display = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+        systemAudio: "include",
+      } as DisplayMediaStreamOptions);
+      meetingTrack = display.getAudioTracks()[0] ?? null;
+      if (!meetingTrack) {
+        display.getTracks().forEach((t) => t.stop());
+        throw new Error("No sound was shared. Share again and tick “Share tab audio” (or “Share system audio” for a whole screen).");
+      }
+      // Only the sound is needed; keep the video track but stop sending frames.
+      display.getVideoTracks().forEach((t) => (t.enabled = false));
     }
-    // Only the sound is needed; keep the video track but stop sending frames.
-    display.getVideoTracks().forEach((t) => (t.enabled = false));
     const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    this.streams = [display, mic];
+    this.streams = display ? [display, mic] : [mic];
 
     this.ctx = new AudioContext({ sampleRate: RATE });
     const url = URL.createObjectURL(new Blob([TAP], { type: "text/javascript" }));
@@ -208,11 +214,13 @@ export class MeetingCapture {
       this.ctx!.createMediaStreamSource(new MediaStream([stream.getAudioTracks()[0]])).connect(node);
       node.connect(silent);
     };
-    wire(display, "Them");
-    wire(mic, "You");
+    if (display) {
+      wire(display, "Them");
+      wire(mic, "You");
+    } else wire(mic, undefined); // microphone only: it hears the whole room, so no labels
 
     // Ending the share from the browser's own "Stop sharing" bar ends listening too.
-    meetingTrack.addEventListener("ended", () => {
+    meetingTrack?.addEventListener("ended", () => {
       if (!this.stopped) {
         this.stop();
         this.opts.onEnded("Sharing stopped.");
@@ -230,3 +238,4 @@ export class MeetingCapture {
 }
 
 export const meetingCaptureSupported = () => !!navigator.mediaDevices?.getDisplayMedia && typeof AudioWorkletNode !== "undefined";
+export const localMicSupported = () => !!navigator.mediaDevices?.getUserMedia && typeof AudioWorkletNode !== "undefined";

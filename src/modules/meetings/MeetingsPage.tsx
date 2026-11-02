@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
 import { addEvent, addTask, analyze, todayLabel, writeNotesPage } from "./agent";
 import { LANGUAGES, speechSupported, useSpeech } from "./speech";
-import { MeetingCapture, meetingCaptureSupported, prepareModel, queued } from "./capture";
+import { localMicSupported, MeetingCapture, meetingCaptureSupported, prepareModel, queued } from "./capture";
 import { clock, parseTranscript, useMeetings, type Meeting } from "./store";
 
 export function MeetingsPage() {
@@ -182,7 +182,9 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const toggle = async () => {
     if (listening) return pause();
     if (!meeting.segments.length && meeting.recorded === 0) update(meeting.id, { startedAt: Date.now() });
-    if (mode === "mic") {
+    // Microphone mode uses the browser's speech service where there is one (Chrome, Edge);
+    // the installed apps and other browsers transcribe on this device instead.
+    if (mode === "mic" && speechSupported()) {
       sessionStart.current = Date.now();
       if (!speech.start()) sessionStart.current = null;
       return;
@@ -191,10 +193,11 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
     try {
       setStarting("Preparing the speech model…");
       await prepareModel((s) => s.phase === "loading" && setStarting(`Downloading the speech model — ${Math.round(s.progress)}% (one time only)`));
-      setStarting("Choose the meeting to listen to…");
+      setStarting(mode === "meeting" ? "Choose the meeting to listen to…" : "Starting the microphone…");
       const c = new MeetingCapture({
         language: meeting.language,
         offset: meeting.recorded,
+        meetingAudio: mode === "meeting",
         onLine: (line) => addSegment(meeting.id, line),
         onEnded: (reason) => {
           pause();
@@ -292,7 +295,9 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
             <div className="mt-1 text-[13px] text-muted">
               {starting ??
                 (capturing
-                  ? "Listening to you and the meeting…"
+                  ? mode === "meeting"
+                    ? "Listening to you and the meeting…"
+                    : "Listening…"
                   : speech.listening
                     ? "Listening…"
                     : meeting.segments.length
@@ -333,7 +338,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
           const problem =
             mode === "meeting"
               ? (captureError ?? (!meetingCaptureSupported() ? "Listening to meeting audio needs Chrome or Edge on a computer. You can still import or paste a transcript." : null))
-              : (speech.error ?? (!speechSupported() ? "Live transcription needs Chrome or Edge. You can still import or paste a transcript." : null));
+              : (speech.error ?? captureError ?? (!speechSupported() && !localMicSupported() ? "This browser can't record audio. You can still import or paste a transcript." : null));
           return (
             problem && (
               <div className="mx-5 mb-4 flex items-start gap-2 rounded-xl bg-neg/10 px-3.5 py-2.5 text-[13px] text-neg">
@@ -376,10 +381,17 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
         <div className="flex items-start gap-2 border-t border-line bg-sunken/40 px-5 py-3 text-[12px] leading-relaxed text-muted">
           <Info className="mt-0.5 size-3.5 shrink-0" />
           {mode === "mic" ? (
-            <span>
-              Microphone mode uses the browser's speech recognition (in Chrome and Edge, the audio is transcribed by the browser's speech service). You can also import the
-              transcript your meeting app saves — Zoom, Meet and Teams export .vtt files.
-            </span>
+            speechSupported() ? (
+              <span>
+                Microphone mode uses the browser's speech recognition (in Chrome and Edge, the audio is transcribed by the browser's speech service). You can also import
+                the transcript your meeting app saves — Zoom, Meet and Teams export .vtt files.
+              </span>
+            ) : (
+              <span>
+                Microphone mode transcribes on this device with an open-source speech model (a one-time download of about 80 MB); nothing is sent anywhere. You can also
+                import the transcript your meeting app saves — Zoom, Meet and Teams export .vtt files.
+              </span>
+            )
           ) : (
             <span>
               When you start, the browser asks what to share. For Meet or Teams in the browser, pick the meeting's tab and keep “Share tab audio” on. For the Zoom or Teams

@@ -1,3 +1,5 @@
+import { inApp } from "@/lib/platform";
+
 /**
  * Free news sources, read through Haven's local feed fetcher (/api/feed):
  * Google News (search, topic sections, top headlines — breadth, localised by region) and
@@ -64,6 +66,16 @@ export const urls = {
 
 /** Fetches a feed through the local fetcher. */
 export async function fetchFeed(url: string): Promise<Candidate[]> {
+  if (inApp) {
+    // The installed apps fetch natively, so no local server is needed.
+    const { fetch: nativeFetch } = await import("@tauri-apps/plugin-http");
+    const res = await nativeFetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Haven feed reader)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5" },
+      connectTimeout: 15_000,
+    });
+    if (!res.ok) throw new Error(`The source answered ${res.status}.`);
+    return parseFeed(await res.text());
+  }
   const res = await fetch(`/api/feed?url=${encodeURIComponent(url)}`, { headers: { "X-Haven": "1" } });
   if (res.status === 404) throw new Error("NO_PROXY");
   if (!res.ok) throw new Error(await res.text());
