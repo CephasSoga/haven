@@ -144,6 +144,8 @@ jobs:
             keytool -genkeypair -keystore haven.p12 -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" -alias haven \
               -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Haven"
           fi
+          # Fail with a clear message if the key can't be opened (wrong password or unreadable format).
+          keytool -list -keystore haven.p12 -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" > /dev/null             || { echo "::error::The Android signing key couldn't be opened — check ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD."; exit 1; }
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           mkdir -p out
