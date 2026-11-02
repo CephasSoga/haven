@@ -5,6 +5,7 @@ import { expandEvents, formatDuration, formatTime, toMinutes, type CalendarEvent
 import type { Plan } from "@/modules/calendar/scheduler";
 import { billDates, type Bill } from "@/modules/finances/store";
 import { CYCLES, step, type Subscription } from "@/modules/subscriptions/store";
+import { KINDS, type Release } from "@/modules/releases/store";
 
 export type Reminder = {
   /** Stable across recalculations as long as nothing about it changes; the system needs a number */
@@ -38,6 +39,8 @@ export function upcomingReminders(input: {
   plan: Plan;
   bills: Bill[];
   subs: Subscription[];
+  /** Releases you follow */
+  releases?: Release[];
   money: (cents: number) => string;
 }): Reminder[] {
   const { now, prefs, money } = input;
@@ -92,6 +95,16 @@ export function upcomingReminders(input: {
         if (dayKey(d) >= from)
           add({ key: `renew:${s.id}:${dayKey(d)}:${s.price}`, at: at(dayKey(d), MORNING - 24 * 60), title: `${s.name} renews tomorrow`, body: money(s.price) });
     }
+
+  if (prefs.releases !== false)
+    for (const r of input.releases ?? [])
+      if (r.date >= from && r.date <= to)
+        add({
+          key: `release:${r.id}:${r.date}`,
+          at: at(r.date, MORNING),
+          title: `Out today: ${r.title}`,
+          body: [KINDS[r.kind].label, r.subtitle].filter(Boolean).join(" · "),
+        });
 
   return out.sort((a, b) => a.at - b.at).map((r) => ({ ...r, id: idFor(r.key) }));
 }

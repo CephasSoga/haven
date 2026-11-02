@@ -8,6 +8,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { applyTheme, useSettings } from "@/store/settings";
 import { useMorningScheduler } from "@/modules/feed/scheduler";
 import { useReminders } from "@/lib/notify";
+import { useReleaseChecker } from "@/modules/releases/check";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Notices } from "@/components/Notices";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -74,6 +75,7 @@ function Splash() {
 function Main() {
   useMorningScheduler();
   useReminders();
+  useReleaseChecker();
   return (
     <HashRouter>
       <Shell>

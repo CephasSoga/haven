@@ -12,9 +12,11 @@ export type ReminderPrefs = {
   bills: boolean;
   /** The day before a subscription renews or a free trial ends */
   subscriptions: boolean;
+  /** The morning something you follow in Releases comes out (missing in settings saved before it existed: on) */
+  releases?: boolean;
 };
 
-export const DEFAULT_REMINDERS: ReminderPrefs = { events: 10, tasks: false, bills: true, subscriptions: true };
+export const DEFAULT_REMINDERS: ReminderPrefs = { events: 10, tasks: false, bills: true, subscriptions: true, releases: true };
 
 type SettingsState = {
   name: string;

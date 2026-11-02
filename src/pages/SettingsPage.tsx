@@ -13,6 +13,7 @@ import { clearFiles } from "@/modules/library/files";
 import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
+import { useReleases } from "@/modules/releases/store";
 import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
@@ -81,6 +82,7 @@ export function SettingsPage() {
       feed: { interests: feed.interests, time: feed.time, perInterest: feed.perInterest, auto: feed.auto, editions: feed.editions },
       meetings: { meetings: meetings.meetings },
       subscriptions: { subs: subscriptions.subs, dismissed: subscriptions.dismissed },
+      releases: (({ kinds, genres, follows, platforms }) => ({ kinds, genres, follows, platforms }))(useReleases.getState()),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -112,6 +114,7 @@ export function SettingsPage() {
       if (data.feed) useFeed.setState({ ...data.feed, running: false, error: null });
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
       if (data.subscriptions?.subs) useSubscriptions.setState({ subs: data.subscriptions.subs, dismissed: data.subscriptions.dismissed ?? [] });
+      if (data.releases?.genres) useReleases.setState({ kinds: data.releases.kinds, genres: data.releases.genres, follows: data.releases.follows ?? {}, platforms: data.releases.platforms ?? null });
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -218,6 +221,7 @@ export function SettingsPage() {
               library.replaceAll([]);
               meetings.replaceAll([]);
               useSubscriptions.setState({ subs: [], dismissed: [] });
+              useReleases.setState({ genres: { movie: [], tv: [], music: [], game: [] }, follows: {} });
               useFeed.setState({ interests: [], editions: [], error: null });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
@@ -544,6 +548,9 @@ function RemindersSection() {
       </Row>
       <Row title="Subscriptions" hint="At 9:00 the day before a renewal or the end of a free trial">
         <Switch checked={prefs.subscriptions} onChange={(subscriptions) => patch({ subscriptions })} label={prefs.subscriptions ? "On" : "Off"} />
+      </Row>
+      <Row title="Releases" hint="At 9:00 on the day a movie, show, album or game you follow comes out">
+        <Switch checked={prefs.releases !== false} onChange={(releases) => patch({ releases })} label={prefs.releases !== false ? "On" : "Off"} />
       </Row>
     </Section>
   );

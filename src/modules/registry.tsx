@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { CalendarDays, Library, Mic, Newspaper, NotebookPen, Repeat, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, Clapperboard, Library, Mic, Newspaper, NotebookPen, Repeat, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
 
 export type ModuleDef = {
   id: string;
@@ -24,5 +24,6 @@ export const MODULES: ModuleDef[] = [
   { id: "subscriptions", name: "Subscriptions", path: "/subscriptions", icon: Repeat, accent: "#d6589f", page: lazy(() => import("./subscriptions/SubscriptionsPage").then((m) => ({ default: m.SubscriptionsPage }))) },
   { id: "notes", name: "Notes", path: "/notes", icon: NotebookPen, accent: "var(--note)", page: lazy(() => import("./notes/NotesPage").then((m) => ({ default: m.NotesPage }))) },
   { id: "library", name: "Library", path: "/library", icon: Library, accent: "#3b82f6", page: lazy(() => import("./library/LibraryPage").then((m) => ({ default: m.LibraryPage }))) },
+  { id: "releases", name: "Releases", path: "/releases", icon: Clapperboard, accent: "#0ea5b7", page: lazy(() => import("./releases/ReleasesPage").then((m) => ({ default: m.ReleasesPage }))) },
   { id: "vault", name: "Vault", path: "/vault", icon: ShieldCheck, accent: "var(--pos)", page: lazy(() => import("./vault/VaultPage").then((m) => ({ default: m.VaultPage }))) },
 ];

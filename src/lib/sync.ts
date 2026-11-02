@@ -12,6 +12,7 @@ import { clearFiles, getFile, putFile } from "@/modules/library/files";
 import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
+import { useReleases } from "@/modules/releases/store";
 import { readVaultFile, useVault, type VaultFile } from "@/modules/vault/store";
 
 /**
@@ -36,6 +37,7 @@ const STORES: Record<string, PersistedStore> = {
   "haven:feed": useFeed,
   "haven:meetings": useMeetings,
   "haven:subscriptions": useSubscriptions,
+  "haven:releases": useReleases,
 };
 const VAULT = "haven:vault";
 const KEYS = [...Object.keys(STORES), VAULT];

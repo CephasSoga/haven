@@ -7,6 +7,7 @@ import { useCalendar } from "@/modules/calendar/store";
 import { useNow, usePlan } from "@/modules/calendar/plan";
 import { useFinance } from "@/modules/finances/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
+import { useReleases } from "@/modules/releases/store";
 
 type NotificationApi = typeof import("@tauri-apps/plugin-notification");
 let api: Promise<NotificationApi> | null = null;
@@ -82,7 +83,7 @@ function showDue(list: Reminder[], now: number) {
   localStorage.setItem(SHOWN, JSON.stringify([...shown].slice(-300)));
 }
 
-/** Keeps reminders for events, planned tasks, bills and subscriptions in step with your data. */
+/** Keeps reminders for events, planned tasks, bills, subscriptions and followed releases in step with your data. */
 export function useReminders() {
   const prefs = useSettings((s) => s.reminders);
   const currency = useSettings((s) => s.currency);
@@ -91,13 +92,15 @@ export function useReminders() {
   const plan = usePlan();
   const bills = useFinance((s) => s.bills);
   const subs = useSubscriptions((s) => s.subs);
+  const follows = useReleases((s) => s.follows);
   const now = useNow();
   // The list only needs rebuilding when the data changes or the clock passes into a new minute.
   const minute = Math.floor(now.getTime() / 60_000);
 
   const list = useMemo(
-    () => upcomingReminders({ now: new Date(minute * 60_000), prefs, events, tasks, plan, bills, subs, money: (c) => formatMoney(c, currency) }),
-    [minute, prefs, events, tasks, plan, bills, subs, currency],
+    () =>
+      upcomingReminders({ now: new Date(minute * 60_000), prefs, events, tasks, plan, bills, subs, releases: Object.values(follows), money: (c) => formatMoney(c, currency) }),
+    [minute, prefs, events, tasks, plan, bills, subs, follows, currency],
   );
   const signature = list.map((r) => `${r.id}@${r.at}`).join(",");
 
