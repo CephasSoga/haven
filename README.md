@@ -17,6 +17,7 @@ npm run build      # type-check + production build into dist/
 | Today     | Greeting, today's plan (events + auto-scheduled tasks), what's coming up, money snapshot, current book, pinned notes |
 | Calendar  | Motion-style planner: tasks with duration, priority, type, deadline (hard/soft), start date, chunking and repeats are auto-scheduled into your work or personal hours around events, re-planned whenever anything changes; at-risk warnings; "Up next"; day/week/month views; drag to move or pin, drag edges to resize; repeating events; meeting buffers |
 | Finances  | Accounts, income/expense transactions, categories with monthly budgets, 6-month cashflow, spending breakdown. Statement import (CSV with automatic column detection, OFX/QFX, QIF, CAMT.053): skips lines already imported, flags ones you typed by hand, tidies bank descriptions, auto-categorizes (learned rules → built-in merchant list → optional Claude) and remembers each bank's CSV layout |
+| Subscriptions | The paid online services you're subscribed to: price and billing cycle, next renewal, free trials (with end dates), payment method, category; monthly and yearly totals with a breakdown; one-tap add for well-known services; spots recurring charges in your imported bank transactions; Today warns about renewals and trials ending within a week |
 | Notes     | Two-pane notes with search, pinning, colors and inline #tags (filterable); empty notes clean themselves up. Morning articles and meeting write-ups are saved here (#reading, #meeting) |
 | Library   | Add PDFs and EPUBs (drag & drop); covers, titles and authors extracted; built-in reader (paper / sepia / night) that saves your place, tracks progress, time spent and completion |
 | Vault     | Encrypted store for logins, cards, bank accounts, IDs, crypto wallets, Wi-Fi, licenses and secure notes; password generator, security check (weak / reused / expiring), auto-lock, clipboard auto-clear |
@@ -53,6 +54,7 @@ src/
     registry.tsx   ← every module is registered here (lazy-loaded); nav + routes follow
     calendar/      store, scheduler (auto-planner), plan hook, time grid, month view, task panel, dialogs
     finances/      store, overview/transactions/budgets/accounts tabs, charts, statement importers, categorization
+    subscriptions/ store (cycles, renewals, totals), service catalog, recurring-charge detection, page
     notes/         store, list + editor page
     library/       metadata store, IndexedDB files, PDF/EPUB extraction, reader
     vault/         crypto, encrypted store, item kinds, item editor

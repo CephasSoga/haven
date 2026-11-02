@@ -12,6 +12,7 @@ import { useLibrary } from "@/modules/library/store";
 import { clearFiles } from "@/modules/library/files";
 import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
+import { useSubscriptions } from "@/modules/subscriptions/store";
 import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/ai";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
@@ -46,6 +47,7 @@ export function SettingsPage() {
   const library = useLibrary();
   const feed = useFeed();
   const meetings = useMeetings();
+  const subscriptions = useSubscriptions();
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -69,6 +71,7 @@ export function SettingsPage() {
       library: { books: library.books },
       feed: { interests: feed.interests, time: feed.time, perInterest: feed.perInterest, auto: feed.auto, editions: feed.editions },
       meetings: { meetings: meetings.meetings },
+      subscriptions: { subs: subscriptions.subs, dismissed: subscriptions.dismissed },
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -98,6 +101,7 @@ export function SettingsPage() {
       if (data.library?.books) library.replaceAll(data.library.books);
       if (data.feed) useFeed.setState({ ...data.feed, running: false, error: null });
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
+      if (data.subscriptions?.subs) useSubscriptions.setState({ subs: data.subscriptions.subs, dismissed: data.subscriptions.dismissed ?? [] });
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -197,6 +201,7 @@ export function SettingsPage() {
               vault.restore(null);
               library.replaceAll([]);
               meetings.replaceAll([]);
+              useSubscriptions.setState({ subs: [], dismissed: [] });
               useFeed.setState({ interests: [], editions: [], error: null });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });

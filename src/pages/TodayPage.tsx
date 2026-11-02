@@ -20,6 +20,7 @@ import { inMonth, sortTransactions, spendByCategory, totalBalance, totals, useFi
 import { compareNotes, preview, useNotes } from "@/modules/notes/store";
 import { useLibrary } from "@/modules/library/store";
 import { useFeed } from "@/modules/feed/store";
+import { upcoming as upcomingRenewals, useSubscriptions, whenLabel } from "@/modules/subscriptions/store";
 import { Cover } from "@/modules/library/Cover";
 
 const rise = (i: number) => ({
@@ -39,6 +40,8 @@ export function TodayPage() {
   const createNote = useNotes((s) => s.create);
   const navigate = useNavigate();
   const books = useLibrary((s) => s.books);
+  const subs = useSubscriptions((s) => s.subs);
+  const renewing = upcomingRenewals(subs, 7);
   const edition = useFeed((s) => s.editions.find((e) => e.date === todayKey()));
   const headlines = edition ? [...edition.items].sort((a, b) => Number(!!b.lead) - Number(!!a.lead)).slice(0, 3) : [];
   const currentBook = books.filter((b) => b.status === "reading").sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0))[0];
@@ -302,6 +305,35 @@ export function TodayPage() {
               ))}
             </div>
           </Card>
+
+          {renewing.length > 0 && (
+            <Card>
+              <CardHeader
+                title={<span className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#d6589f]" /> Renewing soon</span>}
+                action={
+                  <Link to="/subscriptions" className="flex items-center gap-1 text-[13px] font-medium text-[#d6589f] hover:underline">
+                    Subscriptions <ArrowRight className="size-3.5" />
+                  </Link>
+                }
+              />
+              <ul className="p-3">
+                {renewing.slice(0, 4).map(({ sub, date, kind }) => (
+                  <li key={sub.id} className="flex items-center gap-3 rounded-2xl px-3 py-2">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-xl text-[16px]" style={{ background: swatch(sub.color).soft, color: swatch(sub.color).fg }}>
+                      {sub.emoji || sub.name.slice(0, 1)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{sub.name}</span>
+                      <span className={`block text-[12px] ${kind === "trial" ? "font-medium text-[#b7791f]" : "text-muted"}`}>
+                        {kind === "trial" ? "Free trial ends" : "Renews"} {whenLabel(date)}
+                      </span>
+                    </span>
+                    <span className="font-medium tabular">{money(sub.price)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
 
           {currentBook && (
             <Link to={`/library?read=${currentBook.id}`} className="group">
