@@ -12,6 +12,7 @@ type In =
   | { type: "transcribe"; id: number; audio: Float32Array; language: string };
 
 let asr: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
+let device: "webgpu" | "wasm" = "wasm";
 
 async function pickDevice(): Promise<"webgpu" | "wasm"> {
   try {
@@ -25,7 +26,7 @@ async function pickDevice(): Promise<"webgpu" | "wasm"> {
 
 function load() {
   asr ??= (async () => {
-    const device = await pickDevice();
+    device = await pickDevice();
     const p = await pipeline("automatic-speech-recognition", MODEL, {
       device,
       // On the GPU a full-precision encoder keeps accuracy; on the CPU 8-bit weights keep it quick.
@@ -34,7 +35,6 @@ function load() {
         if (p.status === "progress") postMessage({ type: "progress", file: p.file, progress: p.progress ?? 0 });
       },
     });
-    postMessage({ type: "ready", device });
     return p as AutomaticSpeechRecognitionPipeline;
   })();
   return asr;
@@ -43,7 +43,11 @@ function load() {
 self.onmessage = async (e: MessageEvent<In>) => {
   const msg = e.data;
   try {
-    if (msg.type === "load") await load();
+    // Every "load" gets an answer, including after the first: each recording waits for it.
+    if (msg.type === "load") {
+      await load();
+      postMessage({ type: "ready", device });
+    }
     if (msg.type === "transcribe") {
       const t = await load();
       const out = await t(msg.audio, { language: msg.language, task: "transcribe" });
