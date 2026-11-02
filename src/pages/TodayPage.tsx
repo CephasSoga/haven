@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { addDays, format, isTomorrow } from "date-fns";
 import { motion } from "motion/react";
-import { ArrowRight, CalendarPlus, ListPlus, NotebookPen, Plus, Sparkles, Star } from "lucide-react";
+import { ArrowRight, CalendarPlus, ListPlus, Newspaper, NotebookPen, Pin, Plus, Sparkles } from "lucide-react";
 import { Button, Card, CardHeader, Progress } from "@/components/ui";
 import { greeting, monthKey, parseDay, todayKey } from "@/lib/dates";
 import { useMoney } from "@/lib/money";
-import { sampleEvents, sampleFinances, samplePages, sampleTasks } from "@/lib/sample";
+import { sampleEvents, sampleFinances, sampleNotes, sampleTasks } from "@/lib/sample";
 import { swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { DayAgenda } from "@/modules/calendar/DayAgenda";
@@ -17,8 +17,9 @@ import { TaskDialog, newTaskDraft } from "@/modules/calendar/TaskDialog";
 import { TransactionDialog, type TxDraft } from "@/modules/finances/TransactionDialog";
 import { TxRow } from "@/modules/finances/parts";
 import { inMonth, sortTransactions, spendByCategory, totalBalance, totals, useFinance, type Transaction } from "@/modules/finances/store";
-import { COVERS, pageText, useNotes } from "@/modules/notes/store";
+import { compareNotes, preview, useNotes } from "@/modules/notes/store";
 import { useLibrary } from "@/modules/library/store";
+import { useFeed } from "@/modules/feed/store";
 import { Cover } from "@/modules/library/Cover";
 
 const rise = (i: number) => ({
@@ -33,12 +34,13 @@ export function TodayPage() {
   const replaceCalendar = useCalendar((s) => s.replaceAll);
   const plan = usePlan();
   const fin = useFinance();
-  const allPages = useNotes((s) => s.pages);
-  const notes = useMemo(() => allPages.filter((p) => !p.trashedAt), [allPages]);
+  const notes = useNotes((s) => s.notes);
   const replaceNotes = useNotes((s) => s.replaceAll);
   const createNote = useNotes((s) => s.create);
   const navigate = useNavigate();
   const books = useLibrary((s) => s.books);
+  const edition = useFeed((s) => s.editions.find((e) => e.date === todayKey()));
+  const headlines = edition ? [...edition.items].sort((a, b) => Number(!!b.lead) - Number(!!a.lead)).slice(0, 3) : [];
   const currentBook = books.filter((b) => b.status === "reading").sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0))[0];
   const money = useMoney();
   const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
@@ -63,9 +65,8 @@ export function TodayPage() {
   const accById = new Map(fin.accounts.map((a) => [a.id, a]));
 
   const isEmpty = events.length === 0 && tasks.length === 0 && fin.transactions.length === 0 && notes.length === 0;
-  const recentFirst = [...notes].sort((a, b) => b.updatedAt - a.updatedAt);
-  const pinnedNotes = recentFirst.filter((n) => n.favorite).slice(0, 3);
-  const shownNotes = pinnedNotes.length ? pinnedNotes : recentFirst.slice(0, 3);
+  const pinnedNotes = [...notes].sort(compareNotes).filter((n) => n.pinned).slice(0, 3);
+  const shownNotes = pinnedNotes.length ? pinnedNotes : [...notes].sort(compareNotes).slice(0, 3);
   const openEvent = (id: string) => {
     const e = events.find((x) => x.id === id);
     if (e) setEventDraft({ ...e });
@@ -94,7 +95,7 @@ export function TodayPage() {
   const loadSample = () => {
     fin.replaceAll(sampleFinances());
     replaceCalendar({ events: sampleEvents(new Date(), weekStartsOn), tasks: sampleTasks() });
-    replaceNotes(samplePages());
+    replaceNotes(sampleNotes());
   };
 
   const firstName = name.trim().split(/\s+/)[0];
@@ -118,6 +119,36 @@ export function TodayPage() {
           {t.expense > 0 && <>You've spent {money(t.expense)} so far in {format(now, "MMMM")}.</>}
         </p>
       </motion.header>
+
+      {headlines.length > 0 && (
+        <motion.div {...rise(1)}>
+          <Link to="/morning" className="group block">
+            <Card className="relative overflow-hidden p-6 transition-transform group-hover:-translate-y-0.5">
+              <div className="pointer-events-none absolute -right-20 -top-24 size-72 rounded-full opacity-70 blur-3xl" style={{ background: "radial-gradient(circle, rgb(192 88 63 / 0.16), transparent 70%)" }} />
+              <div className="relative grid gap-6 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-[#c0583f]">
+                    <Newspaper className="size-3.5" /> This morning
+                  </div>
+                  <div className="font-serif text-[28px] leading-tight">{headlines[0].title}</div>
+                  <p className="mt-2 line-clamp-2 text-[14px] text-muted">{headlines[0].summary}</p>
+                </div>
+                <ul className="flex flex-col justify-center gap-3 border-line md:border-l md:pl-6">
+                  {headlines.slice(1).map((h) => (
+                    <li key={h.id}>
+                      <div className="text-[12px] text-faint">{h.source}</div>
+                      <div className="line-clamp-2 text-[15px] font-medium leading-snug">{h.title}</div>
+                    </li>
+                  ))}
+                  <li className="flex items-center gap-1 text-[13px] font-medium text-[#c0583f]">
+                    {edition!.items.length} stories in today's edition <ArrowRight className="size-3.5" />
+                  </li>
+                </ul>
+              </div>
+            </Card>
+          </Link>
+        </motion.div>
+      )}
 
       {isEmpty && (
         <motion.div {...rise(1)}>
@@ -297,30 +328,33 @@ export function TodayPage() {
       <motion.section {...rise(4)} className="flex flex-col gap-3">
         <div className="flex items-end justify-between px-1">
           <h2 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
-            <span className="size-2 rounded-full bg-note" /> {pinnedNotes.length ? "Favorite pages" : "Recent pages"}
+            <span className="size-2 rounded-full bg-note" /> {pinnedNotes.length ? "Pinned notes" : "Recent notes"}
           </h2>
           <Link to="/notes" className="flex items-center gap-1 text-[13px] font-medium text-note hover:underline">
             Notes <ArrowRight className="size-3.5" />
           </Link>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {shownNotes.map((n) => (
-            <Link
-              key={n.id}
-              to={`/notes?id=${n.id}`}
-              className="group relative flex min-h-40 flex-col overflow-hidden rounded-3xl border border-line bg-surface shadow-card transition-transform hover:-translate-y-0.5"
-            >
-              <div className="h-12 shrink-0" style={{ background: (n.cover && COVERS[n.cover]) || "var(--sunken)" }} />
-              <div className="relative flex flex-1 flex-col px-5 pb-5">
-                <span className="-mt-5 mb-1 text-[32px] leading-none">{n.icon ?? "📄"}</span>
-                <div className="flex items-start justify-between gap-2">
+          {shownNotes.map((n) => {
+            const s = swatch(n.color);
+            return (
+              <Link
+                key={n.id}
+                to={`/notes?id=${n.id}`}
+                className="group relative flex min-h-40 flex-col overflow-hidden rounded-3xl border border-line bg-surface p-5 shadow-card transition-transform hover:-translate-y-0.5"
+              >
+                <div
+                  className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full blur-2xl"
+                  style={{ background: `radial-gradient(circle, ${s.soft}, transparent 70%)` }}
+                />
+                <div className="relative flex items-start justify-between gap-2">
                   <h3 className="font-serif text-2xl leading-tight">{n.title || "Untitled"}</h3>
-                  {n.favorite && <Star className="mt-1.5 size-3.5 shrink-0 fill-current text-note" />}
+                  {n.pinned && <Pin className="mt-1.5 size-3.5 shrink-0 text-faint" />}
                 </div>
-                <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-muted">{pageText(n.content)}</p>
-              </div>
-            </Link>
-          ))}
+                <p className="relative mt-2 line-clamp-3 text-[13px] leading-relaxed text-muted">{preview(n)}</p>
+              </Link>
+            );
+          })}
           <button
             onClick={() => navigate(`/notes?id=${createNote()}`)}
             className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-line text-muted transition-colors hover:border-line-strong hover:bg-surface hover:text-ink"

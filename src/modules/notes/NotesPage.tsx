@@ -1,93 +1,151 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { formatDistanceToNowStrict } from "date-fns";
+import { format, formatDistanceToNowStrict, isThisYear, isToday, isYesterday } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, ChevronRight, FileText, ImagePlus, NotebookPen, Plus, Smile, Star, Trash2 } from "lucide-react";
-import { Button, Card, EmptyState, IconButton, PageHeader } from "@/components/ui";
-import { cn } from "@/lib/utils";
-import { COVERS, sortPages, useNotes, type Page } from "./store";
-import { PageTree } from "./PageTree";
-import { PageEditor } from "./PageEditor";
-import { CoverPicker, EmojiPicker, Popover } from "./pickers";
+import { ChevronLeft, Hash, NotebookPen, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
+import { Button, Card, EmptyState, IconButton, Input, PageHeader } from "@/components/ui";
+import { cn, swatch, SWATCHES } from "@/lib/utils";
+import { compareNotes, isBlank, preview, tagsOf, useNotes, type Note } from "./store";
+
+function when(ms: number) {
+  const d = new Date(ms);
+  if (isToday(d)) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (isYesterday(d)) return "Yesterday";
+  return format(d, isThisYear(d) ? "MMM d" : "MMM d, yyyy");
+}
+
+function edited(ms: number) {
+  return Date.now() - ms < 60_000 ? "Edited just now" : `Edited ${formatDistanceToNowStrict(ms, { addSuffix: true })}`;
+}
 
 export function NotesPage() {
-  const { pages, create, update, trash, restore, destroy } = useNotes();
+  const { notes, create, update, remove } = useNotes();
   const [params, setParams] = useSearchParams();
-  const live = useMemo(() => pages.filter((p) => !p.trashedAt), [pages]);
-  const trashed = useMemo(() => pages.filter((p) => p.trashedAt), [pages]);
-  const selected = live.find((p) => p.id === params.get("id")) ?? null;
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState<string | null>(null);
+  const selected = notes.find((n) => n.id === params.get("id")) ?? null;
 
-  // Keep the selected page's ancestors open in the tree.
-  const ancestors = useMemo(() => {
-    const out: Page[] = [];
-    let cur = selected && live.find((p) => p.id === selected.parentId);
-    while (cur) {
-      out.unshift(cur);
-      cur = live.find((p) => p.id === cur!.parentId);
-    }
-    return out;
-  }, [selected, live]);
-  useEffect(() => {
-    if (ancestors.length) setExpanded((s) => new Set([...s, ...ancestors.map((a) => a.id)]));
-  }, [ancestors]);
-
-  const select = (id: string | null) => setParams(id ? { id } : {}, { replace: true });
-  const toggle = (id: string) =>
-    setExpanded((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const newPage = (parentId: string | null) => {
-    const id = create({ parentId });
-    if (parentId) setExpanded((s) => new Set([...s, parentId]));
-    select(id);
+  const select = (id: string | null) => {
+    // A note left completely empty isn't worth keeping.
+    if (selected && selected.id !== id && isBlank(selected)) remove(selected.id);
+    setParams(id ? { id } : {}, { replace: true });
   };
+  const newNote = () => select(create(tag ? { body: `\n\n#${tag}` } : undefined));
+
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of notes) for (const t of tagsOf(n)) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [notes]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return notes
+      .filter((n) => (!tag || tagsOf(n).has(tag)) && (!q || `${n.title}\n${n.body}`.toLowerCase().includes(q)))
+      .sort(compareNotes);
+  }, [notes, query, tag]);
+
+  const pinned = visible.filter((n) => n.pinned);
+  const others = visible.filter((n) => !n.pinned);
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="Notes"
-        title="Pages"
+        title={
+          <>
+            Notes <span className="text-faint">{notes.length || ""}</span>
+          </>
+        }
         actions={
-          <Button variant="primary" onClick={() => newPage(null)}>
-            <Plus className="size-4" /> New page
+          <Button variant="primary" onClick={newNote}>
+            <Plus className="size-4" /> New note
           </Button>
         }
       />
 
-      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <Card className={cn("overflow-hidden lg:sticky lg:top-8 lg:block lg:h-[calc(100dvh-10rem)]", selected ? "hidden" : "block")}>
-          <PageTree
-            pages={live}
-            trashed={trashed}
-            selectedId={selected?.id ?? null}
-            expanded={expanded}
-            onToggle={toggle}
-            onSelect={select}
-            onCreate={newPage}
-            onRestore={restore}
-            onDestroy={destroy}
-          />
+      <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
+        {/* List */}
+        <Card
+          className={cn(
+            "flex-col overflow-hidden lg:sticky lg:top-8 lg:flex lg:max-h-[calc(100dvh-10rem)]",
+            selected ? "hidden" : "flex",
+          )}
+        >
+          <div className="flex flex-col gap-3 border-b border-line p-4">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-faint" />
+              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search notes" className="h-10 pl-10" />
+            </div>
+            {allTags.length > 0 && (
+              <div className="-mx-1 flex flex-wrap gap-1.5">
+                {allTags.map(([t, count]) => (
+                  <button
+                    key={t}
+                    onClick={() => setTag(tag === t ? null : t)}
+                    className={cn(
+                      "flex items-center gap-0.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors",
+                      tag === t ? "bg-primary text-on-primary" : "bg-sunken text-muted hover:text-ink",
+                    )}
+                  >
+                    <Hash className="size-3" />
+                    {t}
+                    <span className={cn("ml-1 tabular", tag === t ? "opacity-60" : "text-faint")}>{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-2">
+            {visible.length === 0 ? (
+              <EmptyState
+                icon={<NotebookPen className="size-5" />}
+                title={notes.length ? "No matching notes" : "No notes yet"}
+                body={notes.length ? "Try another search or tag." : "Ideas, lists, things to remember — they all live here."}
+                action={
+                  !notes.length && (
+                    <button onClick={newNote} className="text-sm font-medium text-note hover:underline">
+                      Write your first note
+                    </button>
+                  )
+                }
+              />
+            ) : (
+              <>
+                {pinned.length > 0 && <ListLabel>Pinned</ListLabel>}
+                {pinned.map((n) => (
+                  <NoteItem key={n.id} note={n} active={n.id === selected?.id} onClick={() => select(n.id)} />
+                ))}
+                {pinned.length > 0 && others.length > 0 && <ListLabel>Others</ListLabel>}
+                {others.map((n) => (
+                  <NoteItem key={n.id} note={n} active={n.id === selected?.id} onClick={() => select(n.id)} />
+                ))}
+              </>
+            )}
+          </div>
         </Card>
 
+        {/* Editor */}
         <div className={cn("min-w-0 lg:block", selected ? "block" : "hidden")}>
           <AnimatePresence mode="wait" initial={false}>
             {selected ? (
-              <motion.div key={selected.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
-                <PageView
-                  page={selected}
-                  ancestors={ancestors}
-                  subpages={live.filter((p) => p.parentId === selected.id).sort(sortPages)}
-                  onSelect={select}
-                  onBack={() => select(null)}
-                  onNewSubpage={() => newPage(selected.id)}
+              <motion.div
+                key={selected.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+              >
+                <NoteEditor
+                  note={selected}
                   onChange={(patch) => update(selected.id, patch)}
-                  onTrash={() => {
-                    trash(selected.id);
-                    select(selected.parentId);
+                  onBack={() => select(null)}
+                  onDelete={() => {
+                    if (isBlank(selected) || confirm(`Delete “${selected.title || "Untitled"}”?`)) {
+                      remove(selected.id);
+                      setParams({}, { replace: true });
+                    }
                   }}
                 />
               </motion.div>
@@ -96,11 +154,11 @@ export function NotesPage() {
                 <Card className="flex min-h-[60dvh] items-center justify-center">
                   <EmptyState
                     icon={<NotebookPen className="size-5" />}
-                    title={live.length ? "Pick a page" : "Your first page"}
-                    body="Pages can hold text, to-dos, toggles, quotes, code, tables — and other pages. Type “/” for everything."
+                    title="Pick a note"
+                    body="Choose one from the list, or start something new."
                     action={
-                      <Button onClick={() => newPage(null)}>
-                        <Plus className="size-4" /> New page
+                      <Button onClick={newNote}>
+                        <Plus className="size-4" /> New note
                       </Button>
                     }
                   />
@@ -114,187 +172,130 @@ export function NotesPage() {
   );
 }
 
-function PageView({
-  page,
-  ancestors,
-  subpages,
-  onSelect,
-  onBack,
-  onNewSubpage,
-  onChange,
-  onTrash,
-}: {
-  page: Page;
-  ancestors: Page[];
-  subpages: Page[];
-  onSelect: (id: string) => void;
-  onBack: () => void;
-  onNewSubpage: () => void;
-  onChange: (patch: Partial<Page>) => void;
-  onTrash: () => void;
-}) {
-  const [picker, setPicker] = useState<"icon" | "cover" | null>(null);
-  const title = useRef<HTMLTextAreaElement>(null);
-  const focusEditor = useRef<() => void>(() => {});
-  const onReady = useCallback((focus: () => void) => (focusEditor.current = focus), []);
+function ListLabel({ children }: { children: string }) {
+  return <div className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">{children}</div>;
+}
 
-  // Let the title wrap and grow like a heading.
+function NoteItem({ note, active, onClick }: { note: Note; active: boolean; onClick: () => void }) {
+  const text = preview(note);
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "relative w-full rounded-2xl px-3.5 py-3 text-left transition-colors",
+        active ? "bg-sunken" : "hover:bg-sunken/60",
+      )}
+    >
+      {active && (
+        <motion.span
+          layoutId="note-active"
+          className="absolute inset-y-3 left-0 w-[3px] rounded-full"
+          style={{ background: swatch(note.color).fg }}
+          transition={{ type: "spring", bounce: 0.2, duration: 0.4 }}
+        />
+      )}
+      <div className="flex items-center gap-2">
+        <span className="size-2 shrink-0 rounded-full" style={{ background: swatch(note.color).fg }} />
+        <span className={cn("flex-1 truncate font-medium", !note.title && "text-muted")}>{note.title || "Untitled"}</span>
+        {note.pinned && <Pin className="size-3 shrink-0 text-faint" />}
+        <span className="shrink-0 text-[12px] text-faint tabular">{when(note.updatedAt)}</span>
+      </div>
+      <p className="mt-1 line-clamp-2 pl-4 text-[13px] leading-snug text-muted">{text || "No additional text"}</p>
+    </button>
+  );
+}
+
+function NoteEditor({
+  note,
+  onChange,
+  onBack,
+  onDelete,
+}: {
+  note: Note;
+  onChange: (patch: Partial<Note>) => void;
+  onBack: () => void;
+  onDelete: () => void;
+}) {
+  const body = useRef<HTMLTextAreaElement>(null);
+  const s = swatch(note.color);
+  const tags = [...tagsOf(note)];
+  const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+
+  // Grow the body with its content so the page, not the textarea, scrolls.
   useLayoutEffect(() => {
-    const el = title.current;
+    const el = body.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [page.title]);
-
-  const edited = Date.now() - page.updatedAt < 60_000 ? "Edited just now" : `Edited ${formatDistanceToNowStrict(page.updatedAt, { addSuffix: true })}`;
+  }, [note.body]);
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Breadcrumbs and page actions */}
-      <div className="flex min-h-9 items-center gap-1 text-[13px]">
-        <IconButton label="Back to pages" onClick={onBack} className="-ml-2 lg:hidden">
+    <Card className="relative min-h-[60dvh] overflow-hidden">
+      <div
+        className="pointer-events-none absolute -right-24 -top-32 size-80 rounded-full opacity-80 blur-3xl transition-colors duration-500"
+        style={{ background: `radial-gradient(circle, ${s.soft}, transparent 70%)` }}
+      />
+      <div className="relative flex items-center gap-1 px-4 pt-4 sm:px-6">
+        <IconButton label="Back to notes" onClick={onBack} className="-ml-2 lg:hidden">
           <ChevronLeft className="size-5" />
         </IconButton>
-        <nav className="flex min-w-0 flex-1 items-center gap-1 text-muted">
-          {ancestors.map((a) => (
-            <span key={a.id} className="flex min-w-0 items-center gap-1">
-              <button onClick={() => onSelect(a.id)} className="flex min-w-0 items-center gap-1 truncate rounded-md px-1.5 py-1 hover:bg-sunken hover:text-ink">
-                {a.icon && <span>{a.icon}</span>}
-                <span className="truncate">{a.title || "Untitled"}</span>
-              </button>
-              <ChevronRight className="size-3.5 shrink-0 text-faint" />
-            </span>
+        <span className="text-[13px] text-faint">{edited(note.updatedAt)}</span>
+        <div className="flex-1" />
+        <div className="mr-1 hidden items-center gap-1.5 sm:flex">
+          {SWATCHES.map((sw) => (
+            <button
+              key={sw.id}
+              aria-label={`Color ${sw.id}`}
+              onClick={() => onChange({ color: sw.id })}
+              className={cn(
+                "size-4 rounded-full transition-transform hover:scale-125",
+                note.color === sw.id && "ring-2 ring-offset-2 ring-offset-surface",
+              )}
+              style={{ background: sw.fg, ["--tw-ring-color" as string]: sw.fg }}
+            />
           ))}
-          <span className="flex min-w-0 items-center gap-1 truncate px-1.5 font-medium text-ink">
-            {page.icon && <span>{page.icon}</span>}
-            <span className="truncate">{page.title || "Untitled"}</span>
-          </span>
-        </nav>
-        <span className="hidden text-faint sm:inline">{edited}</span>
-        <IconButton label={page.favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => onChange({ favorite: !page.favorite })}>
-          <Star className={cn("size-[18px]", page.favorite && "fill-current text-note")} />
+        </div>
+        <IconButton label={note.pinned ? "Unpin" : "Pin"} onClick={() => onChange({ pinned: !note.pinned })} className={note.pinned ? "text-ink" : undefined}>
+          {note.pinned ? <PinOff className="size-[18px]" /> : <Pin className="size-[18px]" />}
         </IconButton>
-        <IconButton label="Move to trash" onClick={onTrash} className="hover:text-neg">
+        <IconButton label="Delete note" onClick={onDelete} className="hover:text-neg">
           <Trash2 className="size-[18px]" />
         </IconButton>
       </div>
 
-      <Card className="relative min-h-[70dvh] overflow-visible">
-        {/* Cover */}
-        {page.cover && COVERS[page.cover] && (
-          <div className="group/cover relative h-44 overflow-hidden rounded-t-3xl sm:h-56" style={{ background: COVERS[page.cover] }}>
-            <div
-              className="absolute inset-0 opacity-50 mix-blend-soft-light"
-              style={{ background: "radial-gradient(circle at 20% 20%, rgba(255,255,255,.7), transparent 45%), radial-gradient(circle at 85% 90%, rgba(0,0,0,.25), transparent 50%)" }}
-            />
-            <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 transition-opacity group-hover/cover:opacity-100">
-              <button onClick={() => setPicker("cover")} className="rounded-lg bg-white/80 px-2.5 py-1 text-[12px] font-medium text-[#1b1a17] backdrop-blur hover:bg-white">
-                Change cover
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="group/page relative mx-auto max-w-[860px] pb-24">
-          <div className="relative px-[54px]">
-            {page.icon && (
-              <button
-                onClick={() => setPicker("icon")}
-                className={cn("relative z-10 block rounded-2xl text-[64px] leading-none transition-transform hover:scale-105", page.cover ? "-mt-10" : "mt-12")}
-                aria-label="Change icon"
-              >
-                {page.icon}
-              </button>
-            )}
-
-            {/* Hover controls, as in a notebook margin */}
-            <div className={cn("flex gap-1 opacity-0 transition-opacity group-hover/page:opacity-100 focus-within:opacity-100", page.icon ? "mt-3" : page.cover ? "mt-6" : "mt-12")}>
-              {!page.icon && (
-                <button onClick={() => setPicker("icon")} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-faint hover:bg-sunken hover:text-muted">
-                  <Smile className="size-4" /> Add icon
-                </button>
-              )}
-              {!page.cover && (
-                <button
-                  onClick={() => onChange({ cover: Object.keys(COVERS)[Math.floor(Math.random() * Object.keys(COVERS).length)] })}
-                  className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-faint hover:bg-sunken hover:text-muted"
-                >
-                  <ImagePlus className="size-4" /> Add cover
-                </button>
-              )}
-              <button onClick={onNewSubpage} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-faint hover:bg-sunken hover:text-muted">
-                <FileText className="size-4" /> Add subpage
-              </button>
-            </div>
-
-            <Popover open={picker === "icon"} onClose={() => setPicker(null)} className="left-[54px] top-full">
-              <EmojiPicker
-                onPick={(icon) => {
-                  onChange({ icon });
-                  setPicker(null);
-                }}
-                onRemove={
-                  page.icon
-                    ? () => {
-                        onChange({ icon: undefined });
-                        setPicker(null);
-                      }
-                    : undefined
-                }
-              />
-            </Popover>
-
-            <textarea
-              ref={title}
-              rows={1}
-              value={page.title}
-              onChange={(e) => onChange({ title: e.target.value.replace(/\n/g, "") })}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || (e.key === "ArrowDown" && e.currentTarget.selectionStart === page.title.length)) {
-                  e.preventDefault();
-                  focusEditor.current();
-                }
-              }}
-              autoFocus={!page.title && page.content.length === 0}
-              placeholder="Untitled"
-              className="mt-2 block w-full resize-none overflow-hidden bg-transparent font-serif text-[44px] leading-[1.1] tracking-tight placeholder:text-faint/60 focus:outline-none sm:text-[52px]"
-            />
-          </div>
-
-          {page.cover && (
-            <Popover open={picker === "cover"} onClose={() => setPicker(null)} className="right-6 top-0">
-              <CoverPicker
-                value={page.cover}
-                onPick={(cover) => {
-                  onChange({ cover });
-                  setPicker(null);
-                }}
-                onRemove={() => {
-                  onChange({ cover: undefined });
-                  setPicker(null);
-                }}
-              />
-            </Popover>
-          )}
-
-          <div className="mt-4">
-            <PageEditor pageId={page.id} content={page.content} onReady={onReady} />
-          </div>
-
-          {/* Pages inside this one */}
-          <div className="mt-10 px-[54px]">
-            {subpages.length > 0 && <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">Pages inside</div>}
-            <div className="flex flex-col">
-              {subpages.map((p) => (
-                <button key={p.id} onClick={() => onSelect(p.id)} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[15px] hover:bg-sunken">
-                  {p.icon ? <span className="w-5 text-center">{p.icon}</span> : <FileText className="size-4 text-faint" />}
-                  <span className="border-b border-line font-medium">{p.title || "Untitled"}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+      <div className="relative px-6 pb-8 pt-4 sm:px-10">
+        <input
+          value={note.title}
+          onChange={(e) => onChange({ title: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              body.current?.focus();
+            }
+          }}
+          autoFocus={isBlank(note)}
+          placeholder="Untitled"
+          className="w-full bg-transparent font-serif text-[40px] leading-tight tracking-tight placeholder:text-faint/60 focus:outline-none"
+        />
+        <textarea
+          ref={body}
+          value={note.body}
+          onChange={(e) => onChange({ body: e.target.value })}
+          placeholder="Start writing… use #tags to group notes."
+          rows={8}
+          className="mt-3 block w-full resize-none overflow-hidden bg-transparent text-[16px] leading-7 placeholder:text-faint focus:outline-none"
+        />
+        <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-line pt-4 text-[12px] text-faint">
+          {tags.map((t) => (
+            <span key={t} className="rounded-full px-2 py-0.5 font-medium" style={{ background: s.soft, color: s.fg }}>
+              #{t}
+            </span>
+          ))}
+          <span className="ml-auto tabular">
+            {words} {words === 1 ? "word" : "words"} · Created {format(note.createdAt, "MMM d, yyyy")}
+          </span>
         </div>
-      </Card>
-    </div>
+      </div>
+    </Card>
   );
 }

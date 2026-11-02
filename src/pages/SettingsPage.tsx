@@ -1,14 +1,17 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Download, Monitor, Moon, Sun, Upload } from "lucide-react";
+import { Check, Download, Eye, EyeOff, Monitor, Moon, Sparkles, Sun, Upload } from "lucide-react";
 import { Button, Card, Input, PageHeader, Segmented, Select } from "@/components/ui";
-import { sampleEvents, sampleFinances, samplePages, sampleTasks } from "@/lib/sample";
+import { sampleEvents, sampleFinances, sampleNotes, sampleTasks } from "@/lib/sample";
 import { useSettings, type Theme } from "@/store/settings";
 import { useCalendar } from "@/modules/calendar/store";
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES, useFinance } from "@/modules/finances/store";
-import { fromLegacy, useNotes } from "@/modules/notes/store";
+import { fromPages, useNotes } from "@/modules/notes/store";
 import { readVaultFile, useVault } from "@/modules/vault/store";
 import { useLibrary } from "@/modules/library/store";
 import { clearFiles } from "@/modules/library/files";
+import { useFeed } from "@/modules/feed/store";
+import { useMeetings } from "@/modules/meetings/store";
+import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/ai";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
 
@@ -40,6 +43,8 @@ export function SettingsPage() {
   const notes = useNotes();
   const vault = useVault();
   const library = useLibrary();
+  const feed = useFeed();
+  const meetings = useMeetings();
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -56,11 +61,13 @@ export function SettingsPage() {
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
       calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
       finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions },
-      notes: { pages: notes.pages },
+      notes: { notes: notes.notes },
       // Already encrypted — the backup never contains vault contents in the clear.
       vault: readVaultFile(),
       // Shelf and reading progress; the book files themselves stay in this browser.
       library: { books: library.books },
+      feed: { interests: feed.interests, time: feed.time, perInterest: feed.perInterest, auto: feed.auto, editions: feed.editions },
+      meetings: { meetings: meetings.meetings },
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -83,10 +90,12 @@ export function SettingsPage() {
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
         transactions: data.finances?.transactions ?? [],
       });
-      // Backups from before pages existed hold plain notes; upgrade them on the way in.
-      notes.replaceAll(data.notes?.pages ?? (data.notes?.notes ?? []).map(fromLegacy));
+      // Backups made while Notes used block pages hold `pages`; convert them back to notes.
+      notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []));
       if (data.vault?.app === "haven-vault") vault.restore(data.vault);
       if (data.library?.books) library.replaceAll(data.library.books);
+      if (data.feed) useFeed.setState({ ...data.feed, running: false, error: null });
+      if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -102,6 +111,8 @@ export function SettingsPage() {
           <Input value={settings.name} onChange={(e) => settings.set({ name: e.target.value })} placeholder="Your name" className="sm:w-60" />
         </Row>
       </Section>
+
+      <AiSection />
 
       <Section title="Appearance">
         <Row title="Theme">
@@ -167,7 +178,7 @@ export function SettingsPage() {
               if (!confirm("Replace your calendar, finances and notes with sample data?")) return;
               finance.replaceAll(sampleFinances());
               calendar.replaceAll({ events: sampleEvents(new Date(), settings.weekStartsOn), tasks: sampleTasks() });
-              notes.replaceAll(samplePages());
+              notes.replaceAll(sampleNotes());
               flash("Sample data loaded.");
             }}
           >
@@ -183,6 +194,8 @@ export function SettingsPage() {
               notes.replaceAll([]);
               vault.restore(null);
               library.replaceAll([]);
+              meetings.replaceAll([]);
+              useFeed.setState({ interests: [], editions: [], error: null });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");
@@ -199,5 +212,74 @@ export function SettingsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function AiSection() {
+  const { apiKey, model, set } = useAi();
+  const [shown, setShown] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  return (
+    <Section title="AI">
+      <div className="flex gap-3 border-b border-line px-6 py-5 text-[13px] leading-relaxed text-muted">
+        <Sparkles className="mt-0.5 size-4 shrink-0 text-cal" />
+        <p>
+          The Morning feed and the Meeting assistant use Claude. Add your own Anthropic API key (from console.anthropic.com). It stays in this
+          browser and requests go straight to Anthropic; usage is billed to your Anthropic account — a morning edition is typically a few cents.
+        </p>
+      </div>
+      <Row title="API key" hint={apiKey ? "Saved on this device" : "Not set"}>
+        <div className="flex gap-2">
+          <div className="relative sm:w-72">
+            <Input
+              type={shown ? "text" : "password"}
+              value={apiKey}
+              onChange={(e) => {
+                set({ apiKey: e.target.value });
+                setStatus(null);
+              }}
+              placeholder="sk-ant-…"
+              autoComplete="off"
+              spellCheck={false}
+              className="pr-10 font-mono text-[13px]"
+            />
+            <button onClick={() => setShown(!shown)} aria-label={shown ? "Hide key" : "Show key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-faint hover:text-ink">
+              {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
+          <Button
+            disabled={!apiKey.trim() || testing}
+            onClick={async () => {
+              setTesting(true);
+              try {
+                await testConnection();
+                setStatus({ ok: true, text: "Connected" });
+              } catch (e) {
+                setStatus({ ok: false, text: explain(e) });
+              } finally {
+                setTesting(false);
+              }
+            }}
+          >
+            {testing ? "Testing…" : "Test"}
+          </Button>
+        </div>
+        {status && (
+          <div className={`mt-2 flex items-center gap-1.5 text-[13px] ${status.ok ? "text-pos" : "text-neg"}`}>
+            {status.ok && <Check className="size-3.5" />} {status.text}
+          </div>
+        )}
+      </Row>
+      <Row title="Model" hint="Opus is the most capable; Sonnet is faster and cheaper">
+        <Select value={model} onChange={(e) => set({ model: e.target.value as AiModel })} className="sm:w-60">
+          {AI_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} — {m.hint}
+            </option>
+          ))}
+        </Select>
+      </Row>
+    </Section>
   );
 }

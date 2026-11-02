@@ -5,6 +5,7 @@ import { MODULES } from "@/modules/registry";
 import { TodayPage } from "@/pages/TodayPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { applyTheme, useSettings } from "@/store/settings";
+import { useMorningScheduler } from "@/modules/feed/scheduler";
 
 function useThemeSync() {
   const theme = useSettings((s) => s.theme);
@@ -20,6 +21,7 @@ function useThemeSync() {
 
 export function App() {
   useThemeSync();
+  useMorningScheduler();
   return (
     <HashRouter>
       <Shell>
