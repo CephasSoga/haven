@@ -20,6 +20,11 @@ concurrency:
   group: build-apps-${{ github.ref }}
   cancel-in-progress: true
 
+# Your Supabase project, for accounts and sync (repository variables, not secrets: the anon key is public by design).
+env:
+  VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+
 jobs:
   windows:
     name: Windows installer (.exe)
@@ -73,6 +78,10 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The default list includes the long-retired "tools" package, which no longer exists.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install the Android NDK
         id: ndk
