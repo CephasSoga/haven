@@ -14,6 +14,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The code Tauri generates from plugin settings in tauri.conf.json (the updater's) uses it.
+serde_json = "1"
 tauri-plugin-http = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
