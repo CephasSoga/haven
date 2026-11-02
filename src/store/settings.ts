@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -23,6 +24,18 @@ export const useSettings = create<SettingsState>()(
     { name: "haven:settings", version: 1 },
   ),
 );
+
+/** Tracks whether dark mode is currently applied (it can follow the OS, so read the class, not the setting). */
+export function useIsDark() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setDark(el.classList.contains("dark")));
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
 
 export function applyTheme(theme: Theme) {
   const dark =

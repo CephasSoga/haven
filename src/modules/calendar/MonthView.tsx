@@ -2,14 +2,15 @@ import { useMemo } from "react";
 import { eachDayOfInterval, endOfMonth, endOfWeek, format, isSameMonth, isToday, startOfMonth, startOfWeek } from "date-fns";
 import { cn, swatch } from "@/lib/utils";
 import { dayKey } from "@/lib/dates";
-import { formatTime, type CalendarEvent } from "./store";
+import type { Block } from "./plan";
+import { formatTime } from "./store";
 
 const MAX_CHIPS = 3;
 
 export function MonthView({
   cursor,
   weekStartsOn,
-  byDate,
+  blocks,
   selected,
   onSelect,
   onCreate,
@@ -17,11 +18,11 @@ export function MonthView({
 }: {
   cursor: Date;
   weekStartsOn: 0 | 1;
-  byDate: Map<string, CalendarEvent[]>;
+  blocks: Map<string, Block[]>;
   selected: string;
   onSelect: (key: string) => void;
   onCreate: (key: string) => void;
-  onOpen: (e: CalendarEvent) => void;
+  onOpen: (b: Block) => void;
 }) {
   const days = useMemo(
     () =>
@@ -45,7 +46,7 @@ export function MonthView({
       <div className="grid grid-cols-7" style={{ gridAutoRows: "minmax(0, 1fr)" }}>
         {days.map((d, i) => {
           const key = dayKey(d);
-          const events = byDate.get(key) ?? [];
+          const events = blocks.get(key) ?? [];
           const inMonth = isSameMonth(d, cursor);
           const today = isToday(d);
           const isSelected = key === selected;
@@ -81,7 +82,7 @@ export function MonthView({
               {/* Compact dots on phones */}
               <div className="flex flex-wrap justify-center gap-0.5 sm:hidden">
                 {events.slice(0, 4).map((e) => (
-                  <span key={e.id} className="size-1.5 rounded-full" style={{ background: swatch(e.color).fg }} />
+                  <span key={e.key} className="size-1.5 rounded-full" style={{ background: swatch(e.color).fg }} />
                 ))}
               </div>
 
@@ -91,7 +92,7 @@ export function MonthView({
                   const s = swatch(e.color);
                   return (
                     <button
-                      key={e.id}
+                      key={e.key}
                       onClick={(ev) => {
                         ev.stopPropagation();
                         onOpen(e);
@@ -100,11 +101,15 @@ export function MonthView({
                       className={cn(
                         "flex w-full items-center gap-1.5 truncate rounded-md px-1.5 py-[3px] text-left text-[12px] leading-tight transition-transform hover:translate-x-0.5",
                         !inMonth && "opacity-60",
+                        e.done && "line-through opacity-50",
                       )}
                       style={e.start ? undefined : { background: s.soft }}
                     >
                       {e.start ? (
-                        <span className="size-1.5 shrink-0 rounded-full" style={{ background: s.fg }} />
+                        <span
+                          className={e.kind === "task" ? "size-2 shrink-0 rounded-full border-[1.5px]" : "size-1.5 shrink-0 rounded-full"}
+                          style={e.kind === "task" ? { borderColor: s.fg } : { background: s.fg }}
+                        />
                       ) : null}
                       <span className="truncate font-medium">{e.title}</span>
                       {e.start && (

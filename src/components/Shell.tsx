@@ -1,7 +1,7 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router";
-import { motion } from "motion/react";
-import { Settings, Sun, type LucideIcon } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { Ellipsis, Settings, Sun, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MODULES } from "@/modules/registry";
 
@@ -102,12 +102,50 @@ export function Shell({ children }: { children: ReactNode }) {
         </motion.div>
       </main>
 
-      {/* Mobile tab bar */}
-      <nav className="fixed inset-x-3 bottom-3 z-30 flex rounded-3xl border border-line bg-surface/85 p-1 shadow-float backdrop-blur-xl md:hidden" style={{ marginBottom: "env(safe-area-inset-bottom)" }}>
-        {[...NAV, SETTINGS].map((item) => (
+      <MobileNav />
+    </div>
+  );
+}
+
+/** Phones get the first four destinations as tabs; the rest live behind "More". */
+function MobileNav() {
+  const { pathname } = useLocation();
+  const [more, setMore] = useState(false);
+  const tabs = NAV.slice(0, 4);
+  const rest = [...NAV.slice(4), SETTINGS];
+  const restActive = rest.some((i) => pathname.startsWith(i.path));
+  useEffect(() => setMore(false), [pathname]);
+
+  return (
+    <>
+      <AnimatePresence>
+        {more && (
+          <>
+            <motion.div className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] md:hidden" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setMore(false)} />
+            <motion.div
+              className="fixed inset-x-3 bottom-24 z-40 flex flex-col gap-1 rounded-3xl border border-line bg-surface p-2 shadow-float md:hidden"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ type: "spring", bounce: 0.15, duration: 0.35 }}
+            >
+              {rest.map((item) => (
+                <SideLink key={item.path} item={item} />
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+      <nav className="fixed inset-x-3 bottom-3 z-40 flex rounded-3xl border border-line bg-surface/85 p-1 shadow-float backdrop-blur-xl md:hidden" style={{ marginBottom: "env(safe-area-inset-bottom)" }}>
+        {tabs.map((item) => (
           <TabLink key={item.path} item={item} />
         ))}
+        <button onClick={() => setMore(!more)} className={cn("relative flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium", more || restActive ? "text-ink" : "text-faint")}>
+          {restActive && !more && <span className="absolute inset-x-3 inset-y-1 rounded-2xl bg-sunken" />}
+          <Ellipsis className="relative size-5" />
+          <span className="relative">More</span>
+        </button>
       </nav>
-    </div>
+    </>
   );
 }

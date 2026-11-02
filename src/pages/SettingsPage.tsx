@@ -1,11 +1,14 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react";
 import { Button, Card, Input, PageHeader, Segmented, Select } from "@/components/ui";
-import { sampleEvents, sampleFinances, sampleNotes } from "@/lib/sample";
+import { sampleEvents, sampleFinances, samplePages, sampleTasks } from "@/lib/sample";
 import { useSettings, type Theme } from "@/store/settings";
 import { useCalendar } from "@/modules/calendar/store";
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES, useFinance } from "@/modules/finances/store";
-import { useNotes } from "@/modules/notes/store";
+import { fromLegacy, useNotes } from "@/modules/notes/store";
+import { readVaultFile, useVault } from "@/modules/vault/store";
+import { useLibrary } from "@/modules/library/store";
+import { clearFiles } from "@/modules/library/files";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
 
@@ -35,6 +38,8 @@ export function SettingsPage() {
   const calendar = useCalendar();
   const finance = useFinance();
   const notes = useNotes();
+  const vault = useVault();
+  const library = useLibrary();
   const fileRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -49,9 +54,13 @@ export function SettingsPage() {
       version: 1,
       exportedAt: new Date().toISOString(),
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
-      calendar: { events: calendar.events },
+      calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
       finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions },
-      notes: { notes: notes.notes },
+      notes: { pages: notes.pages },
+      // Already encrypted — the backup never contains vault contents in the clear.
+      vault: readVaultFile(),
+      // Shelf and reading progress; the book files themselves stay in this browser.
+      library: { books: library.books },
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -68,13 +77,16 @@ export function SettingsPage() {
       if (data.app !== "haven") throw new Error("Not a Haven backup");
       if (!confirm("Replace everything in Haven with this backup?")) return;
       if (data.settings) settings.set(data.settings);
-      calendar.replaceAll(data.calendar?.events ?? []);
+      calendar.replaceAll({ events: data.calendar?.events ?? [], tasks: data.calendar?.tasks ?? [], prefs: data.calendar?.prefs });
       finance.replaceAll({
         accounts: data.finances?.accounts ?? DEFAULT_ACCOUNTS,
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
         transactions: data.finances?.transactions ?? [],
       });
-      notes.replaceAll(data.notes?.notes ?? []);
+      // Backups from before pages existed hold plain notes; upgrade them on the way in.
+      notes.replaceAll(data.notes?.pages ?? (data.notes?.notes ?? []).map(fromLegacy));
+      if (data.vault?.app === "haven-vault") vault.restore(data.vault);
+      if (data.library?.books) library.replaceAll(data.library.books);
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -128,7 +140,7 @@ export function SettingsPage() {
       </Section>
 
       <Section title="Your data">
-        <Row title="Back up" hint="Your data lives only in this browser. Download a copy now and then.">
+        <Row title="Back up" hint="Your data lives only in this browser. The backup includes your vault (still encrypted) and reading progress, but not book files.">
           <Button onClick={exportData}>
             <Download className="size-4" /> Export
           </Button>
@@ -154,21 +166,24 @@ export function SettingsPage() {
             onClick={() => {
               if (!confirm("Replace your calendar, finances and notes with sample data?")) return;
               finance.replaceAll(sampleFinances());
-              calendar.replaceAll(sampleEvents(new Date(), settings.weekStartsOn));
-              notes.replaceAll(sampleNotes());
+              calendar.replaceAll({ events: sampleEvents(new Date(), settings.weekStartsOn), tasks: sampleTasks() });
+              notes.replaceAll(samplePages());
               flash("Sample data loaded.");
             }}
           >
             Load samples
           </Button>
         </Row>
-        <Row title="Erase everything" hint="Deletes all events, accounts, transactions and notes">
+        <Row title="Erase everything" hint="Deletes everything: calendar, finances, notes, your vault and your library">
           <Button
             variant="danger"
             onClick={() => {
               if (!confirm("Erase all of your Haven data? Export a backup first if you might want it back.")) return;
-              calendar.replaceAll([]);
+              calendar.replaceAll({ events: [], tasks: [] });
               notes.replaceAll([]);
+              vault.restore(null);
+              library.replaceAll([]);
+              clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");
             }}

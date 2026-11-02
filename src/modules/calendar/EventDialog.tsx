@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { Button, ColorPicker, Field, Input, Modal, Switch, Textarea } from "@/components/ui";
+import { Button, ColorPicker, Field, Input, Modal, Select, Switch, Textarea } from "@/components/ui";
 import { swatch } from "@/lib/utils";
-import { fromMinutes, toMinutes, useCalendar, type EventDraft } from "./store";
+import { fromMinutes, REPEAT_LABELS, toMinutes, useCalendar, type EventDraft, type Repeat } from "./store";
 
 export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onClose: () => void }) {
   const save = useCalendar((s) => s.save);
@@ -122,6 +122,18 @@ export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onCl
             </>
           )}
         </div>
+
+        <Field label="Repeat">
+          {(id) => (
+            <Select id={id} value={f.repeat ?? "none"} onChange={(e) => patch({ repeat: e.target.value as Repeat })}>
+              {Object.entries(REPEAT_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
 
         <Field label="Color">{() => <ColorPicker value={f.color} onChange={(color) => patch({ color })} />}</Field>
 

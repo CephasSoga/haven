@@ -1,43 +1,90 @@
 import { useMemo, useState } from "react";
-import { addMonths, addWeeks, endOfWeek, format, isSameMonth, startOfWeek } from "date-fns";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import {
+  addDays,
+  addMonths,
+  addWeeks,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameMonth,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+} from "date-fns";
+import { CalendarPlus, ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { Button, Card, IconButton, PageHeader, Segmented } from "@/components/ui";
+import { Button, IconButton, PageHeader, Segmented } from "@/components/ui";
 import { useSettings } from "@/store/settings";
-import { dayKey, parseDay, todayKey } from "@/lib/dates";
-import { eventsByDate, useCalendar, type CalendarEvent, type EventDraft } from "./store";
+import { dayKey, parseDay } from "@/lib/dates";
+import { fromMinutes, useCalendar, toMinutes, type EventDraft, type Task, type TaskDraft } from "./store";
+import { buildBlocks, slotsUntilNow, usePlan, type Block } from "./plan";
 import { MonthView } from "./MonthView";
-import { WeekView } from "./WeekView";
-import { DayAgenda } from "./DayAgenda";
+import { TimeGrid } from "./TimeGrid";
+import { TaskPanel } from "./TaskPanel";
 import { EventDialog } from "./EventDialog";
+import { TaskDialog, newTaskDraft } from "./TaskDialog";
+import { HoursDialog } from "./HoursDialog";
 
-type View = "month" | "week";
+type View = "day" | "week" | "month";
 
 export function CalendarPage() {
-  const events = useCalendar((s) => s.events);
+  const { events, tasks, prefs, save, saveTask, completeTask, reopenTask } = useCalendar();
   const weekStartsOn = useSettings((s) => s.weekStartsOn);
-  const [view, setView] = useState<View>("month");
-  const [cursor, setCursor] = useState(() => new Date());
-  const [selected, setSelected] = useState(todayKey);
-  const [draft, setDraft] = useState<EventDraft | null>(null);
+  const plan = usePlan();
+  const [view, setView] = useState<View>(() => (window.innerWidth < 768 ? "day" : "week"));
+  const [cursor, setCursor] = useState(() => startOfDay(new Date()));
+  const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
+  const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
+  const [hoursOpen, setHoursOpen] = useState(false);
 
-  const byDate = useMemo(() => eventsByDate(events), [events]);
-  const selectedEvents = byDate.get(selected) ?? [];
+  const days = useMemo(() => {
+    if (view === "day") return [cursor];
+    if (view === "week") {
+      const s = startOfWeek(cursor, { weekStartsOn });
+      return Array.from({ length: 7 }, (_, i) => addDays(s, i));
+    }
+    return eachDayOfInterval({
+      start: startOfWeek(startOfMonth(cursor), { weekStartsOn }),
+      end: endOfWeek(endOfMonth(cursor), { weekStartsOn }),
+    });
+  }, [view, cursor, weekStartsOn]);
 
-  const step = (dir: 1 | -1) => setCursor((c) => (view === "month" ? addMonths(c, dir) : addWeeks(c, dir)));
-  const goToday = () => {
-    setCursor(new Date());
-    setSelected(todayKey());
+  const blocks = useMemo(() => buildBlocks(days, events, tasks, plan), [days, events, tasks, plan]);
+
+  const step = (dir: 1 | -1) =>
+    setCursor((c) => (view === "month" ? addMonths(c, dir) : view === "week" ? addWeeks(c, dir) : addDays(c, dir)));
+
+  const newEvent = (p: Partial<EventDraft> = {}) =>
+    setEventDraft({ title: "", color: "violet", date: dayKey(cursor), start: "09:00", end: "10:00", ...p });
+
+  const openTask = (t: Task) => setTaskDraft({ ...t });
+  const openBlock = (b: Block) => {
+    if (b.kind === "event") {
+      const e = events.find((x) => x.id === b.id);
+      if (e) setEventDraft({ ...e });
+    } else {
+      const t = tasks.find((x) => x.id === b.id);
+      if (t) openTask(t);
+    }
   };
 
-  const newEvent = (p: Partial<EventDraft> & { date: string }) =>
-    setDraft({ title: "", color: "violet", start: "09:00", end: "10:00", ...p });
-  const openEvent = (e: CalendarEvent) => setDraft({ ...e });
+  const toggleTask = (t: Task) =>
+    t.done ? reopenTask(t.id) : completeTask(t.id, slotsUntilNow(plan.byTask.get(t.id)?.slots ?? []));
 
-  const select = (key: string) => {
-    setSelected(key);
-    const d = parseDay(key);
-    if (view === "month" && !isSameMonth(d, cursor)) setCursor(d);
+  /** Dropping a task pins it there (and resizing sets its length); dropping an event moves it. */
+  const commit = (b: Block, date: string, start: string, end: string) => {
+    if (b.kind === "event") {
+      const e = events.find((x) => x.id === b.id);
+      if (!e) return;
+      const repeating = e.repeat && e.repeat !== "none";
+      save({ ...e, date: repeating ? e.date : date, start, end });
+      return;
+    }
+    const t = tasks.find((x) => x.id === b.id);
+    if (!t) return;
+    const duration = toMinutes(end) - toMinutes(start);
+    saveTask({ ...t, duration: b.parts && b.parts > 1 ? Math.max(t.duration, duration) : duration, locked: { date, start, end } });
   };
 
   const title =
@@ -45,20 +92,21 @@ export function CalendarPage() {
       <>
         {format(cursor, "MMMM")} <span className="text-faint">{format(cursor, "yyyy")}</span>
       </>
+    ) : view === "day" ? (
+      <>
+        {format(cursor, "EEEE")} <span className="text-faint">{format(cursor, "MMM d")}</span>
+      </>
     ) : (
       (() => {
-        const s = startOfWeek(cursor, { weekStartsOn });
-        const e = endOfWeek(cursor, { weekStartsOn });
+        const s = days[0];
+        const e = days[6];
         return (
           <>
-            {format(s, "MMM d")} – {format(e, isSameMonth(s, e) ? "d" : "MMM d")}{" "}
-            <span className="text-faint">{format(e, "yyyy")}</span>
+            {format(s, "MMM d")} – {format(e, isSameMonth(s, e) ? "d" : "MMM d")} <span className="text-faint">{format(e, "yyyy")}</span>
           </>
         );
       })()
     );
-
-  const periodKey = `${view}-${dayKey(view === "month" ? cursor : startOfWeek(cursor, { weekStartsOn }))}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -72,79 +120,87 @@ export function CalendarPage() {
               value={view}
               onChange={setView}
               options={[
-                { value: "month", label: "Month" },
+                { value: "day", label: "Day" },
                 { value: "week", label: "Week" },
+                { value: "month", label: "Month" },
               ]}
             />
             <div className="flex items-center rounded-xl border border-line bg-surface shadow-soft">
               <IconButton label="Previous" onClick={() => step(-1)}>
                 <ChevronLeft className="size-4" />
               </IconButton>
-              <button onClick={goToday} className="px-2 text-[13px] font-medium text-muted hover:text-ink">
+              <button onClick={() => setCursor(startOfDay(new Date()))} className="px-2 text-[13px] font-medium text-muted hover:text-ink">
                 Today
               </button>
               <IconButton label="Next" onClick={() => step(1)}>
                 <ChevronRight className="size-4" />
               </IconButton>
             </div>
-            <Button variant="primary" onClick={() => newEvent({ date: selected })}>
-              <Plus className="size-4" /> New event
+            <IconButton label="Planning hours" onClick={() => setHoursOpen(true)} className="border border-line bg-surface shadow-soft">
+              <SlidersHorizontal className="size-4" />
+            </IconButton>
+            <Button onClick={() => newEvent()}>
+              <CalendarPlus className="size-4" /> Event
+            </Button>
+            <Button variant="primary" onClick={() => setTaskDraft(newTaskDraft())}>
+              <Plus className="size-4" /> Task
             </Button>
           </>
         }
       />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
-            key={periodKey}
+            key={`${view}-${dayKey(days[0])}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.18 }}
+            transition={{ duration: 0.16 }}
             className="min-w-0"
           >
             {view === "month" ? (
               <MonthView
                 cursor={cursor}
                 weekStartsOn={weekStartsOn}
-                byDate={byDate}
-                selected={selected}
-                onSelect={select}
+                blocks={blocks}
+                selected={dayKey(cursor)}
+                onSelect={(key) => {
+                  setCursor(parseDay(key));
+                  setView("day");
+                }}
                 onCreate={(date) => newEvent({ date })}
-                onOpen={openEvent}
+                onOpen={openBlock}
               />
             ) : (
-              <WeekView
-                cursor={cursor}
-                weekStartsOn={weekStartsOn}
-                byDate={byDate}
-                selected={selected}
-                onSelect={select}
-                onCreate={newEvent}
-                onOpen={openEvent}
+              <TimeGrid
+                days={days}
+                blocks={blocks}
+                prefs={prefs}
+                onOpen={openBlock}
+                onCreateAt={(date, start) => newEvent({ date, start, end: fromMinutes(Math.min(toMinutes(start) + 60, 23 * 60 + 59)) })}
+                onToggle={(b) => {
+                  const t = tasks.find((x) => x.id === b.id);
+                  if (t) toggleTask(t);
+                }}
+                onCommit={commit}
+                onSelectDay={(key) => {
+                  setCursor(parseDay(key));
+                  setView("day");
+                }}
               />
             )}
           </motion.div>
         </AnimatePresence>
 
-        <Card className="h-fit xl:sticky xl:top-8">
-          <div className="flex items-end justify-between px-5 pb-3 pt-5">
-            <div>
-              <div className="text-[13px] font-medium text-cal">{format(parseDay(selected), "EEEE")}</div>
-              <div className="font-serif text-4xl leading-none">{format(parseDay(selected), "MMMM d")}</div>
-            </div>
-            <IconButton label="Add event" onClick={() => newEvent({ date: selected })}>
-              <Plus className="size-5" />
-            </IconButton>
-          </div>
-          <div className="px-2 pb-3">
-            <DayAgenda events={selectedEvents} onOpen={openEvent} onCreate={() => newEvent({ date: selected })} compact />
-          </div>
-        </Card>
+        <div className="xl:sticky xl:top-8 xl:h-fit">
+          <TaskPanel plan={plan} onOpen={openTask} onToggle={toggleTask} />
+        </div>
       </div>
 
-      <EventDialog draft={draft} onClose={() => setDraft(null)} />
+      <EventDialog draft={eventDraft} onClose={() => setEventDraft(null)} />
+      <TaskDialog draft={taskDraft} onClose={() => setTaskDraft(null)} />
+      <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router";
 import { Shell } from "@/components/Shell";
 import { MODULES } from "@/modules/registry";
@@ -23,6 +23,7 @@ export function App() {
   return (
     <HashRouter>
       <Shell>
+        <Suspense fallback={<div className="h-[60dvh]" />}>
         <Routes>
           <Route path="/" element={<TodayPage />} />
           {MODULES.map(({ id, path, page: Page }) => (
@@ -31,6 +32,7 @@ export function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </Shell>
     </HashRouter>
   );
