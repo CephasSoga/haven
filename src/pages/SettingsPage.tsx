@@ -17,7 +17,8 @@ import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/a
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
 import { formatDistanceToNowStrict } from "date-fns";
-import { BellRing, CloudCheck, CloudOff, LogOut, RefreshCw } from "lucide-react";
+import { BellRing, CloudCheck, CloudOff, LogOut, Mic, RefreshCw } from "lucide-react";
+import { STT_PROVIDERS, testStt, useStt, type SttProvider } from "@/modules/meetings/stt";
 import { useEffect } from "react";
 import { askNotificationPermission, notificationPermission, notify, type Permission } from "@/lib/notify";
 import { APP_VERSION, inApp, onAndroid } from "@/lib/platform";
@@ -132,6 +133,8 @@ export function SettingsPage() {
       <RemindersSection />
 
       <AiSection />
+
+      <TranscriptionSection />
 
       <Section title="Appearance">
         <Row title="Theme">
@@ -302,6 +305,96 @@ function AiSection() {
           ))}
         </Select>
       </Row>
+    </Section>
+  );
+}
+
+function TranscriptionSection() {
+  const { provider, keys, set } = useStt();
+  const [shown, setShown] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const info = STT_PROVIDERS.find((p) => p.id === provider)!;
+  const key = provider === "device" ? "" : (keys[provider] ?? "");
+  return (
+    <Section title="Meeting transcription">
+      <div className="flex gap-3 border-b border-line px-6 py-5 text-[13px] leading-relaxed text-muted">
+        <Mic className="mt-0.5 size-4 shrink-0 text-cal" />
+        <p>
+          Claude can't listen to audio, so meetings are transcribed by a speech service. With an OpenAI key, each sentence's audio is sent to OpenAI as you record and
+          comes back accurately transcribed; without one, Haven transcribes on this device — private and free, but rough until you use “Improve transcript”. Keys stay in
+          this browser and are billed to your own account.
+        </p>
+      </div>
+      <Row title="Service" hint={info.hint}>
+        <Select
+          value={provider}
+          onChange={(e) => {
+            set({ provider: e.target.value as SttProvider });
+            setStatus(null);
+          }}
+          className="sm:w-72"
+        >
+          {STT_PROVIDERS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      {provider !== "device" && (
+        <Row
+          title="API key"
+          hint={key ? "Saved on this device" : `Not set — until it is, meetings are transcribed on this device`}
+        >
+          <div className="flex gap-2">
+            <div className="relative sm:w-72">
+              <Input
+                type={shown ? "text" : "password"}
+                value={key}
+                onChange={(e) => {
+                  set({ keys: { ...keys, [provider]: e.target.value } });
+                  setStatus(null);
+                }}
+                placeholder={provider === "openai" ? "sk-…" : "gsk_…"}
+                autoComplete="off"
+                spellCheck={false}
+                className="pr-10 font-mono text-[13px]"
+              />
+              <button onClick={() => setShown(!shown)} aria-label={shown ? "Hide key" : "Show key"} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-faint hover:text-ink">
+                {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <Button
+              disabled={!key.trim() || testing}
+              onClick={async () => {
+                setTesting(true);
+                try {
+                  await testStt();
+                  setStatus({ ok: true, text: "Connected" });
+                } catch (e) {
+                  setStatus({ ok: false, text: e instanceof Error ? e.message : String(e) });
+                } finally {
+                  setTesting(false);
+                }
+              }}
+            >
+              {testing ? "Testing…" : "Test"}
+            </Button>
+          </div>
+          {status ? (
+            <div className={`mt-2 flex items-center gap-1.5 text-[13px] ${status.ok ? "text-pos" : "text-neg"}`}>
+              {status.ok && <Check className="size-3.5" />} {status.text}
+            </div>
+          ) : (
+            info.keyUrl && (
+              <a href={info.keyUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[13px] font-medium text-cal hover:underline">
+                Get a key
+              </a>
+            )
+          )}
+        </Row>
+      )}
     </Section>
   );
 }

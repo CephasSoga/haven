@@ -8,6 +8,8 @@ export type Segment = {
   at: number;
   text: string;
   speaker?: string;
+  /** The recorded audio this line came from, kept on this device so the transcript can be redone */
+  clip?: string;
 };
 
 export type ActionItem = {
@@ -84,7 +86,16 @@ export const useMeetings = create<MeetingsState>()(
         return m.id;
       },
       update: (id, patch) => set((s) => ({ meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
-      addSegment: (id, seg) => set((s) => ({ meetings: s.meetings.map((m) => (m.id === id ? { ...m, segments: [...m.segments, seg] } : m)) })),
+      // Lines can finish transcribing out of order (you and the meeting are transcribed separately), so keep them in time order.
+      addSegment: (id, seg) =>
+        set((s) => ({
+          meetings: s.meetings.map((m) => {
+            if (m.id !== id) return m;
+            let i = m.segments.length;
+            while (i > 0 && m.segments[i - 1].at > seg.at) i--;
+            return { ...m, segments: [...m.segments.slice(0, i), seg, ...m.segments.slice(i)] };
+          }),
+        })),
       patchAction: (id, index, patch) =>
         set((s) => ({
           meetings: s.meetings.map((m) =>

@@ -146,6 +146,89 @@ export async function analyze(meeting: Meeting): Promise<Analysis> {
   };
 }
 
+/* ---------- Correcting the transcript ---------- */
+
+const FIX_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["fixes"],
+  properties: {
+    fixes: {
+      type: "array",
+      description: "Only the lines that need changing",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["line", "text"],
+        properties: {
+          line: { type: "integer", description: "The line's number, as given" },
+          text: { type: "string", description: "The corrected line; an empty string removes a line that is only noise" },
+        },
+      },
+    },
+  },
+};
+
+const FIX_SYSTEM = `You correct transcripts made by speech recognition, which mishears words — especially names, numbers, technical terms and non-English speech, where it often writes sounds as nonsense words.
+
+- Restore what was actually said, using the surrounding lines, the meeting's language and the recorder's notes (which often contain the right names). For example, French heard as "Say tune bonne idée, on lame et en plaste" is "C'est une bonne idée, on la met en place".
+- Fix spelling, capitalisation and punctuation. Keep the speaker's own words and language — never translate, summarise, shorten or add content.
+- Keep each line separate: never merge lines, split them or move text between them.
+- When a line is only noise the recogniser invented (e.g. "Thank you for watching", "Sous-titres réalisés par…") and fits nothing around it, return it as an empty string.
+- When you can't tell what was said, leave the line as it is.
+- Return only the lines you changed.`;
+
+/** Asks Claude to correct speech-recognition errors line by line; returns the corrected lines (empty ones removed). */
+export async function correctTranscript(meeting: Meeting): Promise<Meeting["segments"]> {
+  const segments = meeting.segments;
+  if (!segments.length) return segments;
+  const language = LANGUAGE_NAMES[meeting.language.slice(0, 2)] ?? meeting.language;
+  const user = [
+    `The meeting was held in ${language}.`,
+    meeting.myNotes.trim() && `The recorder's notes:\n${meeting.myNotes.trim()}`,
+    `Transcript, one numbered line per utterance:\n${segments.map((s, i) => `${i + 1}. ${s.speaker ? `${s.speaker}: ` : ""}${s.text}`).join("\n")}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const res = await client()
+    .beta.messages.stream({
+      ...baseRequest(),
+      max_tokens: 64000,
+      output_config: { effort: "medium", format: { type: "json_schema", schema: FIX_SCHEMA } },
+      system: FIX_SYSTEM,
+      messages: [{ role: "user", content: user }],
+    })
+    .finalMessage();
+
+  if (res.stop_reason === "refusal") throw new AiError("Claude declined to correct this transcript.");
+  if (res.stop_reason === "max_tokens") throw new AiError("The transcript was too long to correct in one go.");
+  let fixes: { line: number; text: string }[];
+  try {
+    fixes = JSON.parse(res.content.map((b) => (b.type === "text" ? b.text : "")).join("")).fixes;
+  } catch {
+    throw new AiError("Claude's answer couldn't be read. Try again.");
+  }
+  const out = segments.map((s) => ({ ...s }));
+  for (const f of fixes) {
+    const s = out[f.line - 1];
+    if (!s) continue;
+    // Claude sometimes repeats the speaker label it was shown; it's kept separately.
+    s.text = s.speaker ? f.text.replace(new RegExp(`^${s.speaker}:\\s*`), "") : f.text;
+  }
+  return out.filter((s) => s.text.trim());
+}
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: "English",
+  fr: "French",
+  es: "Spanish",
+  de: "German",
+  pt: "Portuguese",
+  it: "Italian",
+  nl: "Dutch",
+};
+
 /* ---------- Acting on it ---------- */
 
 export function addTask(meeting: Meeting, index: number) {

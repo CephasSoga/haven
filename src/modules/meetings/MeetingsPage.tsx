@@ -22,6 +22,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Wand2,
 } from "lucide-react";
 import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Segmented, Select, Textarea } from "@/components/ui";
 import { explain, useAi } from "@/lib/ai";
@@ -30,6 +31,9 @@ import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
 import { addEvent, addTask, analyze, todayLabel, writeNotesPage } from "./agent";
 import { LANGUAGES, speechSupported, useSpeech } from "./speech";
 import { localMicSupported, MeetingCapture, meetingCaptureSupported, prepareModel, queued } from "./capture";
+import { countClips, deleteMeetingClips } from "./clips";
+import { improveTranscript, useImprove } from "./improve";
+import { cloudStt, STT_PROVIDERS, useStt } from "./stt";
 import { clock, parseTranscript, useMeetings, type Meeting } from "./store";
 
 export function MeetingsPage() {
@@ -86,6 +90,7 @@ export function MeetingsPage() {
               onDelete={async () => {
                 if (!(await ask({ title: "Delete this meeting?", body: "Its transcript and notes go too. Tasks, events and notes you already added stay where they are.", confirmLabel: "Delete", danger: true }))) return;
                 remove(selected.id);
+                void deleteMeetingClips(selected.id);
                 select(null);
               }}
             />
@@ -129,6 +134,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const [starting, setStarting] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [backlog, setBacklog] = useState(0);
+  const cloudProvider = useStt((s) => (s.provider !== "device" && s.keys[s.provider]?.trim() ? s.provider : null));
 
   const elapsed = () => meeting.recorded + (sessionStart.current ? Date.now() - sessionStart.current : 0);
   const speech = useSpeech(meeting.language, (text) => addSegment(meeting.id, { at: elapsed(), text }));
@@ -182,19 +188,22 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const toggle = async () => {
     if (listening) return pause();
     if (!meeting.segments.length && meeting.recorded === 0) update(meeting.id, { startedAt: Date.now() });
-    // Microphone mode uses the browser's speech service where there is one (Chrome, Edge);
-    // the installed apps and other browsers transcribe on this device instead.
-    if (mode === "mic" && speechSupported()) {
+    // Microphone mode uses the browser's speech service where there is one (Chrome, Edge) unless a
+    // transcription service is set up; the installed apps and other browsers transcribe on this device.
+    if (mode === "mic" && speechSupported() && !cloudStt()) {
       sessionStart.current = Date.now();
       if (!speech.start()) sessionStart.current = null;
       return;
     }
     setCaptureError(null);
     try {
-      setStarting("Preparing the speech model…");
-      await prepareModel((s) => s.phase === "loading" && setStarting(`Downloading the speech model — ${Math.round(s.progress)}% (one time only)`));
+      if (!cloudStt()) {
+        setStarting("Preparing the speech model…");
+        await prepareModel((s) => s.phase === "loading" && setStarting(`Downloading the speech model — ${Math.round(s.progress)}% (one time only)`));
+      }
       setStarting(mode === "meeting" ? "Choose the meeting to listen to…" : "Starting the microphone…");
       const c = new MeetingCapture({
+        meetingId: meeting.id,
         language: meeting.language,
         offset: meeting.recorded,
         meetingAudio: mode === "meeting",
@@ -203,6 +212,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
           pause();
           if (reason) setCaptureError(`${reason} Press the button to listen again.`);
         },
+        onWarning: setCaptureError,
       });
       await c.start();
       capture.current = c;
@@ -378,9 +388,17 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
           </div>
         )}
 
+        {!listening && !starting && meeting.segments.length > 0 && <ImproveRow meeting={meeting} hasKey={hasKey} />}
+
         <div className="flex items-start gap-2 border-t border-line bg-sunken/40 px-5 py-3 text-[12px] leading-relaxed text-muted">
           <Info className="mt-0.5 size-3.5 shrink-0" />
-          {mode === "mic" ? (
+          {cloudProvider ? (
+            <span>
+              Transcribed by {STT_PROVIDERS.find((p) => p.id === cloudProvider)?.label.split(" (")[0]} with your API key, chosen in Settings — the audio of each
+              sentence is sent to them. If they can't be reached, Haven transcribes on this device instead.
+              {mode === "meeting" && " When you start, the browser asks what to share: pick the meeting's tab (keep “Share tab audio” on), or for the Zoom or Teams app, “Entire screen” with “Share system audio”."}
+            </span>
+          ) : mode === "mic" ? (
             speechSupported() ? (
               <span>
                 Microphone mode uses the browser's speech recognition (in Chrome and Edge, the audio is transcribed by the browser's speech service). You can also import
@@ -444,6 +462,63 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
           if (segments.length) update(meeting.id, { segments: [...meeting.segments, ...segments] });
         }}
       />
+    </div>
+  );
+}
+
+/* ---------- Improving the transcript ---------- */
+
+function ImproveRow({ meeting, hasKey }: { meeting: Meeting; hasKey: boolean }) {
+  const job = useImprove();
+  const running = job.meetingId === meeting.id && !!job.step;
+  const otherRunning = !!job.step && job.meetingId !== meeting.id;
+  const [clips, setClips] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  // How many lines still have their audio, i.e. can be redone on this device.
+  useEffect(() => {
+    let live = true;
+    countClips(meeting.id)
+      .then((n) => live && setClips(n))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [meeting.id, meeting.segments.length, running]);
+
+  if (!clips && !hasKey) return null;
+
+  const status =
+    job.step === "download"
+      ? `Downloading the more accurate model — ${Math.round(job.progress)}% (one time only, up to 600 MB)`
+      : job.step === "transcribe"
+        ? `Redoing the transcript on this device — ${job.done} of ${job.total}`
+        : job.step === "correct"
+          ? "Claude is correcting what was misheard…"
+          : null;
+
+  const plan = clips
+    ? `Redoes the transcript on this device with a more accurate model${hasKey ? ", then Claude fixes what was still misheard" : ""}. This takes a while — about as long as the speech itself, or longer on an older laptop.`
+    : "Claude reads the transcript and fixes what speech recognition misheard — names, numbers, words in other languages.";
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-line px-5 py-3.5">
+      <Button
+        onClick={async () => {
+          setError(null);
+          try {
+            await improveTranscript(meeting.id);
+          } catch (e) {
+            setError(explain(e));
+          }
+        }}
+        disabled={running || otherRunning}
+      >
+        <Wand2 className={cn("size-4", running && "animate-pulse")} /> {running ? "Improving…" : "Improve transcript"}
+      </Button>
+      <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted">
+        {running ? status : otherRunning ? "Another meeting's transcript is being improved." : (error ?? plan)}
+      </span>
     </div>
   );
 }
