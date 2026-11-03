@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { addDays, addMonths, getDate, getDay } from "date-fns";
+import { addDays, addMonths, format, getDate, getDay } from "date-fns";
 import { uid } from "@/lib/utils";
 import { dayKey, parseDay, todayKey } from "@/lib/dates";
 
@@ -20,6 +20,10 @@ export type CalendarEvent = {
   location?: string;
   notes?: string;
   repeat?: Repeat;
+  /** Weekly events: the days of the week it happens on (0 = Sunday). Absent: the start date's weekday */
+  days?: number[];
+  /** yyyy-MM-dd — for repeating events, the last day it can happen; absent: no end */
+  until?: string;
 };
 
 export type EventDraft = Omit<CalendarEvent, "id"> & { id?: string };
@@ -76,9 +80,31 @@ export type TaskDraft = Omit<Task, "id" | "createdAt"> & { id?: string; createdA
 
 /* ---------- Planner preferences ---------- */
 
-export type Hours = { on: boolean; start: string; end: string };
+export type TimeRange = { start: string; end: string };
+/**
+ * A day's hours: `start`–`end`, plus any further stretches in `more` (e.g. 06:00–08:00 and 20:00–22:00).
+ * Extra stretches sit beside the first rather than replacing it, so copies of Haven from before they
+ * existed still read the day correctly.
+ */
+export type Hours = { on: boolean; start: string; end: string; more?: TimeRange[] };
 /** Indexed by day of week, 0 = Sunday */
 export type WeekHours = Hours[];
+
+/** A day's hours as [start, end] minutes: in order, overlaps merged, empty or backwards stretches dropped. */
+export function rangesOf(h: Hours | undefined): [number, number][] {
+  if (!h?.on) return [];
+  const all = [{ start: h.start, end: h.end }, ...(h.more ?? [])]
+    .map((r) => [toMinutes(r.start), toMinutes(r.end)] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  const out: [number, number][] = [];
+  for (const [a, b] of all) {
+    const last = out.at(-1);
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
 
 export type PlannerPrefs = {
   work: WeekHours;
@@ -177,6 +203,7 @@ export const REPEAT_LABELS: Record<Repeat, string> = {
 
 export function occursOn(e: CalendarEvent, key: string, day: Date) {
   if (key < e.date) return false;
+  if (e.until && e.repeat && e.repeat !== "none" && key > e.until) return false;
   switch (e.repeat ?? "none") {
     case "none":
       return key === e.date;
@@ -185,10 +212,32 @@ export function occursOn(e: CalendarEvent, key: string, day: Date) {
     case "weekdays":
       return getDay(day) !== 0 && getDay(day) !== 6;
     case "weekly":
-      return getDay(day) === getDay(parseDay(e.date));
+      return e.days?.length ? e.days.includes(getDay(day)) : getDay(day) === getDay(parseDay(e.date));
     case "monthly":
       return getDate(day) === getDate(parseDay(e.date));
   }
+}
+
+/** The days of the week a weekly event happens on. */
+export const weeklyDays = (e: Pick<CalendarEvent, "date" | "days">) => (e.days?.length ? e.days : [getDay(parseDay(e.date))]);
+
+/** "Every Mon, Wed and Fri, from Nov 3 to Dec 19, 2026" — how an event repeats, in words. */
+export function repeatSummary(e: Pick<CalendarEvent, "date" | "repeat" | "days" | "until">, weekStartsOn: 0 | 1 = 1, { withStart = false } = {}) {
+  const repeat = e.repeat ?? "none";
+  if (repeat === "none") return REPEAT_LABELS.none;
+  let text: string = REPEAT_LABELS[repeat];
+  if (repeat === "weekly") {
+    const order = (d: number) => (d - weekStartsOn + 7) % 7;
+    const days = [...weeklyDays(e)].sort((a, b) => order(a) - order(b));
+    const names = days.map((d) => format(addDays(new Date(2026, 0, 4), d), "EEE"));
+    text =
+      days.length === 7 ? "Every day" : days.length === 1 ? `Every ${format(addDays(new Date(2026, 0, 4), days[0]), "EEEE")}` : `Every ${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  }
+  const start = parseDay(e.date);
+  const end = e.until ? parseDay(e.until) : null;
+  if (withStart && end) return `${text}, from ${format(start, start.getFullYear() === end.getFullYear() ? "MMM d" : "MMM d, yyyy")} to ${format(end, "MMM d, yyyy")}`;
+  if (withStart) return `${text}, starting ${format(start, "MMM d, yyyy")}`;
+  return end ? `${text}, until ${format(end, "MMM d, yyyy")}` : text;
 }
 
 /** Every event occurrence on the given days, keyed by yyyy-MM-dd. */
