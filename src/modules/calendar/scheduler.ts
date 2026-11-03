@@ -1,6 +1,6 @@
 import { addDays, getDay } from "date-fns";
 import { dayKey, parseDay } from "@/lib/dates";
-import { PRIORITIES, expandEvents, fromMinutes, toMinutes, type CalendarEvent, type PlannerPrefs, type Slot, type Task } from "./store";
+import { PRIORITIES, expandEvents, fromMinutes, rangesOf, toMinutes, type CalendarEvent, type PlannerPrefs, type Slot, type Task } from "./store";
 
 /**
  * The auto-planner. Given fixed events, flexible tasks and your hours, it lays tasks into free time:
@@ -119,31 +119,33 @@ export function schedule({
       for (let i = 0; i < keys.length && remaining > 0; i++) {
         const key = keys[i];
         if (t.startDate && key < t.startDate) continue;
-        const hours = prefs[t.schedule][getDay(days[i])];
-        if (!hours?.on) continue;
-        const win: Interval = [toMinutes(hours.start), toMinutes(hours.end)];
-        if (key === today) win[0] = Math.max(win[0], anchor);
-        if (win[0] >= win[1]) continue;
-
-        for (const [a, b] of freeIn(win, busy.get(key) ?? [])) {
+        // A day can have several stretches of hours (e.g. early morning and evening); try each in turn.
+        for (const range of rangesOf(prefs[t.schedule][getDay(days[i])])) {
           if (remaining <= 0) break;
-          const room = b - a;
-          let take: number;
-          if (!t.chunk) {
-            if (room < remaining) continue;
-            take = remaining;
-          } else {
-            take = Math.min(room, remaining);
-            if (take < remaining) {
-              if (take < minChunk) continue;
-              // Never leave a leftover shorter than the minimum chunk.
-              if (remaining - take < minChunk) take = remaining - minChunk;
-              if (take < minChunk) continue;
+          const win: Interval = [...range];
+          if (key === today) win[0] = Math.max(win[0], anchor);
+          if (win[0] >= win[1]) continue;
+
+          for (const [a, b] of freeIn(win, busy.get(key) ?? [])) {
+            if (remaining <= 0) break;
+            const room = b - a;
+            let take: number;
+            if (!t.chunk) {
+              if (room < remaining) continue;
+              take = remaining;
+            } else {
+              take = Math.min(room, remaining);
+              if (take < remaining) {
+                if (take < minChunk) continue;
+                // Never leave a leftover shorter than the minimum chunk.
+                if (remaining - take < minChunk) take = remaining - minChunk;
+                if (take < minChunk) continue;
+              }
             }
+            slots.push({ date: key, start: fromMinutes(a), end: fromMinutes(a + take) });
+            block(busy, key, [a, a + take]);
+            remaining -= take;
           }
-          slots.push({ date: key, start: fromMinutes(a), end: fromMinutes(a + take) });
-          block(busy, key, [a, a + take]);
-          remaining -= take;
         }
       }
       byTask.set(t.id, { status: statusFor(t, slots, remaining), slots });

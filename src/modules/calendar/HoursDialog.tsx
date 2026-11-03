@@ -1,8 +1,34 @@
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import { Button, Field, Input, Modal, Segmented } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
-import { useCalendar, type WeekHours } from "./store";
+import { fromMinutes, toMinutes, useCalendar, type TimeRange, type WeekHours } from "./store";
+
+/** One stretch of hours: start – end, with a remove button for the extra ones. */
+function RangeRow({ range, onChange, onRemove }: { range: TimeRange; onChange: (r: Partial<TimeRange>) => void; onRemove?: () => void }) {
+  const backwards = range.end <= range.start;
+  return (
+    <div className="flex items-center gap-2">
+      <Input type="time" value={range.start} onChange={(e) => e.target.value && onChange({ start: e.target.value })} className="h-9 min-w-0" />
+      <span className="text-faint">–</span>
+      <Input
+        type="time"
+        value={range.end}
+        onChange={(e) => e.target.value && onChange({ end: e.target.value })}
+        className={cn("h-9 min-w-0", backwards && "border-neg focus:border-neg")}
+        title={backwards ? "Ends before it starts — these hours are ignored" : undefined}
+      />
+      {onRemove ? (
+        <button type="button" onClick={onRemove} aria-label="Remove these hours" className="shrink-0 rounded-lg p-1.5 text-faint hover:bg-sunken hover:text-ink">
+          <X className="size-4" />
+        </button>
+      ) : (
+        <span className="w-7 shrink-0" />
+      )}
+    </div>
+  );
+}
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const BUFFERS = [0, 5, 10, 15, 30];
@@ -39,7 +65,7 @@ export function HoursDialog({ open, onClose }: { open: boolean; onClose: () => v
           {order.map((d) => {
             const h = hours[d];
             return (
-              <div key={d} className={cn("flex items-center gap-3 rounded-2xl px-3 py-2 transition-colors", h.on ? "bg-sunken/60" : "")}>
+              <div key={d} className={cn("flex items-start gap-3 rounded-2xl px-3 py-2 transition-colors", h.on ? "bg-sunken/60" : "")}>
                 <button
                   type="button"
                   onClick={() => setDay(d, { on: !h.on })}
@@ -51,10 +77,28 @@ export function HoursDialog({ open, onClose }: { open: boolean; onClose: () => v
                   {DAY_NAMES[d]}
                 </button>
                 {h.on ? (
-                  <div className="flex flex-1 items-center gap-2">
-                    <Input type="time" value={h.start} onChange={(e) => e.target.value && setDay(d, { start: e.target.value })} className="h-9" />
-                    <span className="text-faint">–</span>
-                    <Input type="time" value={h.end} onChange={(e) => e.target.value && setDay(d, { end: e.target.value })} className="h-9" />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    <RangeRow range={h} onChange={(r) => setDay(d, r)} />
+                    {(h.more ?? []).map((r, i) => (
+                      <RangeRow
+                        key={i}
+                        range={r}
+                        onChange={(next) => setDay(d, { more: h.more!.map((x, j) => (j === i ? { ...x, ...next } : x)) })}
+                        onRemove={() => setDay(d, { more: h.more!.filter((_, j) => j !== i) })}
+                      />
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // A new stretch an hour after the day's last one, e.g. evening hours after a morning slot.
+                        const last = Math.max(...[h, ...(h.more ?? [])].map((r) => toMinutes(r.end)));
+                        const start = Math.min(last + 60, 22 * 60);
+                        setDay(d, { more: [...(h.more ?? []), { start: fromMinutes(start), end: fromMinutes(Math.min(start + 120, 24 * 60 - 1)) }] });
+                      }}
+                      className="flex items-center gap-1 self-start rounded-lg px-1 py-0.5 text-[12px] font-medium text-cal hover:underline"
+                    >
+                      <Plus className="size-3.5" /> Add hours
+                    </button>
                   </div>
                 ) : (
                   <span className="flex-1 text-[13px] text-faint">Off — tap the day to turn on</span>

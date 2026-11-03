@@ -5,7 +5,7 @@ import { cn, swatch } from "@/lib/utils";
 import { dayKey } from "@/lib/dates";
 import { isMoney, useNow, type Block } from "./plan";
 import { MoneyIcon } from "./MoneyIcon";
-import { PRIORITIES, formatTime, fromMinutes, toMinutes, type PlannerPrefs } from "./store";
+import { PRIORITIES, formatTime, fromMinutes, rangesOf, toMinutes, type PlannerPrefs } from "./store";
 
 const HOUR = 60;
 const SNAP = 15;
@@ -89,7 +89,7 @@ export function TimeGrid({
   const wide = days.length === 1;
 
   useEffect(() => {
-    const starts = prefs.work.filter((h) => h.on).map((h) => toMinutes(h.start));
+    const starts = prefs.work.flatMap((h) => rangesOf(h).map(([a]) => a));
     scroller.current?.scrollTo({ top: Math.max(0, (Math.min(...starts, 8 * 60) - 45) * (HOUR / 60)) });
     // Only on first mount — later scroll position is the user's.
   }, []);
@@ -209,7 +209,12 @@ export function TimeGrid({
             {days.map((d, dayIdx) => {
               const key = dayKey(d);
               const today = isToday(d);
-              const work = prefs.work[getDay(d)];
+              // Shade everything outside working hours, including the gaps between several stretches.
+              const gaps = rangesOf(prefs.work[getDay(d)]).reduce<{ from: number; gaps: [number, number][] }>(
+                (acc, [a, b]) => ({ from: b, gaps: a > acc.from ? [...acc.gaps, [acc.from, a]] : acc.gaps }),
+                { from: 0, gaps: [] },
+              );
+              const shaded = [...gaps.gaps, ...(gaps.from < 24 * 60 ? [[gaps.from, 24 * 60] as [number, number]] : [])];
               const placed = layout((blocks.get(key) ?? []).filter((b) => !drag?.moved || b.key !== drag.b.key));
               return (
                 <div
@@ -222,14 +227,9 @@ export function TimeGrid({
                   }}
                 >
                   {/* Outside working hours is shaded */}
-                  {work?.on ? (
-                    <>
-                      <div className="absolute inset-x-0 top-0 bg-sunken/70" style={{ height: (toMinutes(work.start) / 60) * HOUR }} />
-                      <div className="absolute inset-x-0 bottom-0 bg-sunken/70" style={{ top: (toMinutes(work.end) / 60) * HOUR }} />
-                    </>
-                  ) : (
-                    <div className="absolute inset-0 bg-sunken/70" />
-                  )}
+                  {shaded.map(([a, b]) => (
+                    <div key={a} className="absolute inset-x-0 bg-sunken/70" style={{ top: (a / 60) * HOUR, height: ((b - a) / 60) * HOUR }} />
+                  ))}
                   {HOURS.slice(1).map((h) => (
                     <div key={h} className="absolute inset-x-0 border-t border-line/70" style={{ top: h * HOUR }} />
                   ))}

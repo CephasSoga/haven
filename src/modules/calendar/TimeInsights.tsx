@@ -6,7 +6,7 @@ import { IconButton, Modal, Segmented } from "@/components/ui";
 import { dayKey } from "@/lib/dates";
 import { cn, swatch } from "@/lib/utils";
 import { buildBlocks, usePlan, type Block } from "./plan";
-import { TASK_TYPES, formatDuration, toMinutes, useCalendar } from "./store";
+import { TASK_TYPES, formatDuration, rangesOf, toMinutes, useCalendar } from "./store";
 
 type Period = "week" | "month";
 
@@ -48,15 +48,13 @@ export function TimeInsights({ open, onClose, cursor, weekStartsOn }: { open: bo
     let booked = 0;
 
     days.forEach((d, i) => {
-      const work = prefs.work[getDay(d)];
-      const ws = work.on ? toMinutes(work.start) : 0;
-      const we = work.on ? toMinutes(work.end) : 0;
-      capacity += we - ws;
+      const work = rangesOf(prefs.work[getDay(d)]);
+      capacity += work.reduce((s, [a, b]) => s + b - a, 0);
       for (const b of blocks.get(dayKey(d)) ?? []) {
         const min = minutesOf(b);
         if (!min) continue;
         // Overlap with that day's working hours, for "how full is my week".
-        if (work.on) booked += Math.max(0, Math.min(we, toMinutes(b.end!)) - Math.max(ws, toMinutes(b.start!)));
+        for (const [ws, we] of work) booked += Math.max(0, Math.min(we, toMinutes(b.end!)) - Math.max(ws, toMinutes(b.start!)));
         if (b.kind === "event") {
           perDay[i].events += min;
           const key = b.title.trim().toLowerCase() || "untitled";
