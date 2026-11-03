@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
@@ -25,6 +25,8 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
   const { update, setProgress, addReadingTime } = useLibrary();
   const live = useLibrary((s) => s.books.find((b) => b.id === book.id)) ?? book;
   const [blob, setBlob] = useState<Blob | null | undefined>(undefined);
+  // While a PDF is zoomed in, the page-turn strips at the sides step aside so the page can be dragged.
+  const [zoomed, setZoomed] = useState(false);
   // Why the book can't be shown, in words; and whether trying again could help.
   const [problem, setProblem] = useState<{ text: string; retry?: boolean } | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -137,18 +139,26 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
           </Centered>
         )}
         {blob && !problem && live.format === "pdf" && (
-          <PdfView blob={blob} start={Number(book.location) || 1} night={paper === "night"} nav={nav} onProgress={onProgress} onFail={() => setProblem({ text: UNREADABLE.pdf })} />
+          <PdfView
+            blob={blob}
+            start={Number(book.location) || 1}
+            night={paper === "night"}
+            nav={nav}
+            onProgress={onProgress}
+            onFail={() => setProblem({ text: UNREADABLE.pdf })}
+            onZoomed={setZoomed}
+          />
         )}
         {blob && !problem && live.format === "epub" && (
           <EpubView blob={blob} start={book.location} theme={theme} nav={nav} onProgress={onProgress} onFail={() => setProblem({ text: UNREADABLE.epub })} />
         )}
 
-        <button onClick={() => nav.current.prev()} aria-label="Previous page" className="group absolute inset-y-0 left-0 hidden w-16 items-center justify-center sm:flex">
+        <button onClick={() => nav.current.prev()} aria-label="Previous page" className={cn("group absolute inset-y-0 left-0 hidden w-16 items-center justify-center sm:flex", zoomed && "sm:hidden")}>
           <span className="rounded-full p-2 opacity-25 transition-opacity group-hover:opacity-70" style={{ background: `${theme.fg}14` }}>
             <ChevronLeft className="size-5" />
           </span>
         </button>
-        <button onClick={() => nav.current.next()} aria-label="Next page" className="group absolute inset-y-0 right-0 hidden w-16 items-center justify-center sm:flex">
+        <button onClick={() => nav.current.next()} aria-label="Next page" className={cn("group absolute inset-y-0 right-0 hidden w-16 items-center justify-center sm:flex", zoomed && "sm:hidden")}>
           <span className="rounded-full p-2 opacity-25 transition-opacity group-hover:opacity-70" style={{ background: `${theme.fg}14` }}>
             <ChevronRight className="size-5" />
           </span>
@@ -201,12 +211,46 @@ const UNREADABLE = {
 
 /* ---------- PDF ---------- */
 
-function PdfView({ blob, start, night, nav, onProgress, onFail }: { blob: Blob; start: number; night: boolean; nav: MutableRefObject<Nav>; onProgress: Progress; onFail: () => void }) {
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 0.25;
+
+function PdfView({
+  blob,
+  start,
+  night,
+  nav,
+  onProgress,
+  onFail,
+  onZoomed,
+}: {
+  blob: Blob;
+  start: number;
+  night: boolean;
+  nav: MutableRefObject<Nav>;
+  onProgress: Progress;
+  onFail: () => void;
+  onZoomed: (zoomed: boolean) => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(start);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoomState] = useState(1);
+  const [dragging, setDragging] = useState(false);
+  // The point of the page in the middle of the screen, kept there when the zoom changes.
+  const focus = useRef<{ x: number; y: number } | null>(null);
+  const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+
+  const setZoom = (next: (z: number) => number) => {
+    const el = box.current;
+    if (el && el.scrollWidth && el.scrollHeight)
+      focus.current = { x: (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth, y: (el.scrollTop + el.clientHeight / 2) / el.scrollHeight };
+    setZoomState((z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next(z))));
+  };
+
+  useEffect(() => onZoomed(zoom > 1), [zoom, onZoomed]);
+  useEffect(() => () => onZoomed(false), [onZoomed]);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
 
@@ -268,6 +312,12 @@ function PdfView({ blob, start, night, nav, onProgress, onFail }: { blob: Blob; 
       c.height = Math.floor(viewport.height);
       c.style.width = `${Math.floor(viewport.width / dpr)}px`;
       c.style.height = `${Math.floor(viewport.height / dpr)}px`;
+      // Zooming keeps the same spot of the page in the middle of the screen.
+      const el = box.current;
+      if (el && focus.current) {
+        el.scrollTo({ left: focus.current.x * el.scrollWidth - el.clientWidth / 2, top: focus.current.y * el.scrollHeight - el.clientHeight / 2 });
+        focus.current = null;
+      }
       task = p.render({ canvas: c, viewport });
       await task.promise.catch(() => {});
     })();
@@ -277,17 +327,46 @@ function PdfView({ blob, start, night, nav, onProgress, onFail }: { blob: Blob; 
     };
   }, [doc, current, width, height, zoom]);
 
+  // Zoomed in, the page can be dragged around with the mouse; on touch screens fingers already scroll it.
+  const canDrag = zoom > 1;
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    const el = box.current;
+    if (!canDrag || !el || e.pointerType !== "mouse" || e.button !== 0) return;
+    drag.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    el.setPointerCapture(e.pointerId);
+    setDragging(true);
+  };
+  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const el = box.current;
+    if (!drag.current || !el) return;
+    el.scrollTo({ left: drag.current.left - (e.clientX - drag.current.x), top: drag.current.top - (e.clientY - drag.current.y) });
+  };
+  const endDrag = () => {
+    drag.current = null;
+    setDragging(false);
+  };
+
   return (
-    <div ref={box} className="absolute inset-0 overflow-auto">
+    <div
+      ref={box}
+      className={cn("absolute inset-0 overflow-auto", canDrag && (dragging ? "cursor-grabbing select-none" : "cursor-grab"))}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    >
       <div className="flex min-h-full min-w-fit items-center justify-center p-4">
-        <canvas ref={canvas} className="rounded-sm bg-white shadow-float" style={night ? { filter: "invert(0.88) hue-rotate(180deg)" } : undefined} />
+        <canvas ref={canvas} draggable={false} className="rounded-sm bg-white shadow-float" style={night ? { filter: "invert(0.88) hue-rotate(180deg)" } : undefined} />
       </div>
-      <div className="fixed bottom-20 right-6 flex items-center gap-1 rounded-full bg-black/60 p-1 text-white shadow-float backdrop-blur">
-        <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))} aria-label="Zoom out" className="rounded-full p-1.5 hover:bg-white/15">
+      {/* Above the page-turn strips at the sides, so "+" never turns the page. */}
+      <div className="fixed bottom-20 right-6 z-20 flex items-center gap-1 rounded-full bg-black/60 p-1 text-white shadow-float backdrop-blur" onPointerDown={(e) => e.stopPropagation()}>
+        <button onClick={() => setZoom((z) => z - ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out" className="rounded-full p-1.5 hover:bg-white/15 disabled:opacity-40">
           <Minus className="size-4" />
         </button>
-        <button onClick={() => setZoom(1)} className="min-w-12 text-[12px] tabular">{Math.round(zoom * 100)}%</button>
-        <button onClick={() => setZoom((z) => Math.min(3, z + 0.25))} aria-label="Zoom in" className="rounded-full p-1.5 hover:bg-white/15">
+        <button onClick={() => setZoom(() => 1)} title="Back to 100%" className="min-w-12 text-[12px] tabular">
+          {Math.round(zoom * 100)}%
+        </button>
+        <button onClick={() => setZoom((z) => z + ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in" className="rounded-full p-1.5 hover:bg-white/15 disabled:opacity-40">
           <Plus className="size-4" />
         </button>
       </div>
