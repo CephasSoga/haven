@@ -6,6 +6,15 @@ import { dayKey, parseDay, todayKey } from "@/lib/dates";
 import type { Cents } from "@/lib/money";
 
 export type Cycle = "weekly" | "monthly" | "quarterly" | "yearly";
+export type Unit = "day" | "week" | "month" | "year";
+/** A custom interval: every `n` days, weeks, months or years */
+export type Every = { n: number; unit: Unit };
+/**
+ * How often something comes round: one of the usual cycles, or a custom interval. A custom
+ * interval still keeps the nearest usual cycle in `cycle`, so copies of Haven from before
+ * custom intervals existed read it sensibly instead of breaking.
+ */
+export type Repeats = { cycle: Cycle; every?: Every };
 export type SubStatus = "active" | "trial" | "paused" | "cancelled";
 
 export type Subscription = {
@@ -14,6 +23,8 @@ export type Subscription = {
   /** Price per billing cycle */
   price: Cents;
   cycle: Cycle;
+  /** A custom interval, overriding `cycle` */
+  every?: Every;
   /** yyyy-MM-dd — a renewal date; later ones are worked out from the cycle */
   renews: string;
   category: string;
@@ -22,6 +33,10 @@ export type Subscription = {
   trialEnds?: string;
   /** e.g. "Visa ••4242" or "PayPal" */
   paidWith?: string;
+  /** The Finances account payments come out of, when you mark them paid */
+  accountId?: string;
+  /** yyyy-MM-dd — the latest renewal you've marked as paid */
+  paidThrough?: string;
   /** Where to manage or cancel it */
   url?: string;
   emoji?: string;
@@ -82,7 +97,46 @@ export const CATEGORIES: Record<string, { label: string; emoji: string }> = {
   other: { label: "Other", emoji: "🔁" },
 };
 
-export function step(d: Date, cycle: Cycle, n = 1) {
+export const UNITS: Record<Unit, { one: string; many: string; perMonth: number }> = {
+  day: { one: "day", many: "days", perMonth: 365.25 / 12 },
+  week: { one: "week", many: "weeks", perMonth: 52 / 12 },
+  month: { one: "month", many: "months", perMonth: 1 },
+  year: { one: "year", many: "years", perMonth: 1 / 12 },
+};
+
+/** The usual cycle closest to a custom interval, for older copies of Haven. */
+export const nearestCycle = (u: Unit): Cycle => (u === "year" ? "yearly" : u === "month" ? "monthly" : "weekly");
+
+const custom = (r: Cycle | Repeats) => (typeof r === "string" ? undefined : r.every && r.every.n > 0 ? r.every : undefined);
+
+/** "Monthly", "Every 2 weeks"… */
+export function cycleLabel(r: Repeats) {
+  const e = custom(r);
+  if (!e) return CYCLES[r.cycle].label;
+  return e.n === 1 ? `Every ${UNITS[e.unit].one}` : `Every ${e.n} ${UNITS[e.unit].many}`;
+}
+
+/** "month", "2 weeks"… — as in "€9.99 / month". */
+export function perLabel(r: Repeats) {
+  const e = custom(r);
+  if (!e) return CYCLES[r.cycle].per;
+  return e.n === 1 ? UNITS[e.unit].one : `${e.n} ${UNITS[e.unit].many}`;
+}
+
+/** What a price per cycle comes to per month. */
+export function perMonth(r: Repeats, price: number) {
+  const e = custom(r);
+  return e ? (price * UNITS[e.unit].perMonth) / e.n : CYCLES[r.cycle].perMonth(price);
+}
+
+/** Moves a date on by `n` cycles — of a usual cycle, or of a subscription's or bill's own interval. */
+export function step(d: Date, r: Cycle | Repeats, n = 1) {
+  const e = custom(r);
+  if (e) {
+    const k = e.n * n;
+    return e.unit === "day" ? addDays(d, k) : e.unit === "week" ? addDays(d, 7 * k) : e.unit === "month" ? addMonths(d, k) : addYears(d, k);
+  }
+  const cycle = typeof r === "string" ? r : r.cycle;
   if (cycle === "weekly") return addDays(d, 7 * n);
   if (cycle === "monthly") return addMonths(d, n);
   if (cycle === "quarterly") return addMonths(d, 3 * n);
@@ -92,8 +146,34 @@ export function step(d: Date, cycle: Cycle, n = 1) {
 /** The next renewal on or after today, rolling forward from the stored date. */
 export function nextRenewal(s: Subscription, today = todayKey()) {
   let d = parseDay(s.renews);
-  for (let i = 0; dayKey(d) < today && i < 1000; i++) d = step(d, s.cycle);
+  for (let i = 0; dayKey(d) < today && i < 1000; i++) d = step(d, s);
   return dayKey(d);
+}
+
+/** The latest renewal on or before today — the payment for the period you're in — if one has happened. */
+export function lastRenewal(s: Subscription, today = todayKey()) {
+  let d = parseDay(s.renews);
+  if (dayKey(d) > today) return null;
+  for (let i = 0; i < 5000; i++) {
+    const next = step(d, s);
+    if (dayKey(next) > today) break;
+    d = next;
+  }
+  return dayKey(d);
+}
+
+/**
+ * The payment you can mark as paid now: this period's renewal if it isn't marked yet, or the next
+ * one when it's within a week. `overdue` is only said once you've started marking payments for it.
+ */
+export function payable(s: Subscription, today = todayKey()): { date: string; overdue: boolean; early: boolean } | null {
+  if (s.status !== "active") return null;
+  const paid = (d: string) => !!s.paidThrough && s.paidThrough >= d;
+  const current = lastRenewal(s, today);
+  if (current && !paid(current)) return { date: current, overdue: !!s.paidThrough && current < today, early: false };
+  const next = current ? dayKey(step(parseDay(current), s)) : nextRenewal(s, today);
+  if (!paid(next) && daysUntil(next) <= 7) return { date: next, overdue: false, early: next > today };
+  return null;
 }
 
 export function daysUntil(date: string) {
@@ -103,7 +183,7 @@ export function daysUntil(date: string) {
 export const counts = (s: Subscription) => s.status === "active" || s.status === "trial";
 
 export function monthlyCost(s: Subscription) {
-  return Math.round(CYCLES[s.cycle].perMonth(s.price));
+  return Math.round(perMonth(s, s.price));
 }
 
 export function totals(subs: Subscription[]) {

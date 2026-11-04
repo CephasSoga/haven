@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { uid } from "@/lib/utils";
 import { dayKey, parseDay, todayKey } from "@/lib/dates";
-import { step as stepCycle, type Cycle } from "@/modules/subscriptions/store";
+import { step as stepCycle, type Cycle, type Every } from "@/modules/subscriptions/store";
 import type { Cents } from "@/lib/money";
 import type { AccountKind } from "./icons";
 import type { Mapping } from "./importers";
@@ -39,6 +39,8 @@ export type Transaction = {
   note?: string;
   /** Set when the transaction records paying a bill */
   billId?: string;
+  /** Set when it's a subscription payment you marked as paid */
+  subscriptionId?: string;
   /** Set on imported transactions: identifies the statement line, so it's never imported twice */
   importKey?: string;
 };
@@ -49,6 +51,8 @@ export type Bill = {
   name: string;
   amount: Cents;
   cycle: Cycle;
+  /** A custom interval, overriding `cycle` */
+  every?: Every;
   /** yyyy-MM-dd — the next payment still to make; moves on when you mark it paid or skip it */
   due: string;
   accountId: string;
@@ -233,13 +237,13 @@ export function sortTransactions(txs: Transaction[]) {
 /* ---------- Bills ---------- */
 
 export function nextDue(b: Bill) {
-  return dayKey(stepCycle(parseDay(b.due), b.cycle));
+  return dayKey(stepCycle(parseDay(b.due), b));
 }
 
 /** Every due date of a bill between `from` and `to` (yyyy-MM-dd), starting from its next unpaid one. */
 export function billDates(b: Bill, from: string, to: string) {
   const out: string[] = [];
   let d = parseDay(b.due);
-  for (let i = 0; dayKey(d) <= to && i < 600; i++, d = stepCycle(d, b.cycle)) if (dayKey(d) >= from) out.push(dayKey(d));
+  for (let i = 0; dayKey(d) <= to && i < 600; i++, d = stepCycle(d, b)) if (dayKey(d) >= from) out.push(dayKey(d));
   return out;
 }

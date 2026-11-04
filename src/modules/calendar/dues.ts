@@ -33,7 +33,7 @@ export function dueBlocks(days: Date[], bills: Bill[], subs: Subscription[], for
       push({ key: `s:${s.id}:trial`, kind: "renewal", id: s.id, title: `${s.name} trial ends`, date: s.trialEnds, color: "amber" });
     if (s.status !== "active") continue;
     let d = parseDay(s.renews);
-    for (let i = 0; dayKey(d) <= to && i < 1000; i++, d = step(d, s.cycle))
+    for (let i = 0; dayKey(d) <= to && i < 1000; i++, d = step(d, s))
       if (dayKey(d) >= from) push({ key: `s:${s.id}:${dayKey(d)}`, kind: "renewal", id: s.id, title: `${s.name} · ${format(s.price)}`, date: dayKey(d), color: s.color, amount: s.price });
   }
   return map;

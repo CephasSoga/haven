@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { format } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, ExternalLink, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { ask } from "@/components/confirm";
 import { Button, Card, ColorPicker, Field, Input, Modal, PageHeader, Segmented, Select, Textarea } from "@/components/ui";
 import { centsToInput, currencySymbol, parseAmount, useMoney } from "@/lib/money";
@@ -9,22 +9,26 @@ import { parseDay, todayKey } from "@/lib/dates";
 import { cn, swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { useFinance } from "@/modules/finances/store";
+import { CycleField } from "./CycleField";
+import { markPaid } from "./payments";
 import { detect, findService, SERVICES, type Service, type Suggestion } from "./services";
 import {
   CATEGORIES,
   counts,
-  CYCLES,
+  cycleLabel,
   daysUntil,
+  lastRenewal,
   monthlyCost,
   nextRenewal,
+  payable,
+  perLabel,
+  type SubDraft,
+  type Subscription,
+  type SubStatus,
   totals,
   upcoming,
   useSubscriptions,
   whenLabel,
-  type Cycle,
-  type SubDraft,
-  type SubStatus,
-  type Subscription,
 } from "./store";
 
 const ACCENT = "#d6589f";
@@ -244,8 +248,12 @@ function SubCard({ sub, onClick }: { sub: Subscription; onClick: () => void }) {
   const date = nextDate(sub);
   const days = daysUntil(date);
   const inactive = sub.status === "paused" || sub.status === "cancelled";
+  const due = payable(sub);
+  const today = todayKey();
+  const paidNow = !due && sub.status === "active" && !!sub.paidThrough && sub.paidThrough >= (lastRenewal(sub, today) ?? "");
   return (
-    <button onClick={onClick} className={cn("group relative w-full overflow-hidden rounded-3xl border border-line bg-surface p-5 text-left shadow-card transition-transform hover:-translate-y-0.5", inactive && "opacity-60")}>
+    <div className={cn("group relative w-full overflow-hidden rounded-3xl border border-line bg-surface p-5 text-left shadow-card transition-transform hover:-translate-y-0.5", inactive && "opacity-60")}>
+      <button onClick={onClick} aria-label={`Edit ${sub.name}`} className="absolute inset-0 z-[1] rounded-3xl" />
       <div className="pointer-events-none absolute -right-10 -top-12 size-36 rounded-full blur-2xl transition-opacity group-hover:opacity-100" style={{ background: s.soft, opacity: 0.7 }} />
       <div className="relative flex items-start gap-3">
         <Logo sub={sub} />
@@ -270,8 +278,8 @@ function SubCard({ sub, onClick }: { sub: Subscription; onClick: () => void }) {
       <div className="relative mt-5 flex items-end justify-between gap-3">
         <div>
           <span className="font-serif text-[32px] leading-none tabular">{money(sub.price)}</span>
-          <span className="ml-1 text-[13px] text-muted">/ {CYCLES[sub.cycle].per}</span>
-          {sub.cycle !== "monthly" && <div className="mt-1 text-[12px] text-faint tabular">≈ {money(monthlyCost(sub))} a month</div>}
+          <span className="ml-1 text-[13px] text-muted">/ {perLabel(sub)}</span>
+          {(sub.cycle !== "monthly" || sub.every) && <div className="mt-1 text-[12px] text-faint tabular">≈ {money(monthlyCost(sub))} a month</div>}
         </div>
         {!inactive && (
           <div className={cn("text-right text-[12px]", days <= 3 ? "font-semibold text-[#b7791f]" : "text-muted")}>
@@ -282,7 +290,25 @@ function SubCard({ sub, onClick }: { sub: Subscription; onClick: () => void }) {
           </div>
         )}
       </div>
-    </button>
+      {(due || paidNow) && (
+        <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-line pt-3">
+          {due ? (
+            <>
+              <span className={cn("text-[12px]", due.overdue ? "font-medium text-neg" : "text-muted")}>
+                {due.overdue ? `Unpaid since ${format(parseDay(due.date), "MMM d")}` : due.early ? `${format(parseDay(due.date), "MMM d")} payment, coming up` : `${format(parseDay(due.date), "MMM d")} payment`}
+              </span>
+              <Button size="sm" variant={due.overdue ? "primary" : undefined} onClick={() => markPaid(sub, due.date)} className="relative z-[2]">
+                <Check className="size-3.5" /> Mark paid
+              </Button>
+            </>
+          ) : (
+            <span className="flex items-center gap-1.5 text-[12px] font-medium text-pos">
+              <Check className="size-3.5" /> Paid for {format(parseDay(sub.paidThrough!), "MMM d")}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -304,7 +330,7 @@ function Suggestions({ items, onAdd, onDismiss }: { items: Suggestion[]; onAdd: 
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{s.name}</div>
               <div className="text-[12px] text-muted tabular">
-                {money(s.price)} {CYCLES[s.cycle].label.toLowerCase()} · seen {s.seen} {s.seen === 1 ? "time" : "times"}, last {format(parseDay(s.last), "MMM d")}
+                {money(s.price)} {cycleLabel(s).toLowerCase()} · seen {s.seen} {s.seen === 1 ? "time" : "times"}, last {format(parseDay(s.last), "MMM d")}
               </div>
             </div>
             <Button size="sm" onClick={() => onAdd(s)}>
@@ -371,6 +397,7 @@ function SubDialog({ draft, onClose }: { draft: SubDraft | null; onClose: () => 
   const f = form ?? draft;
   if (!f) return null;
   const patch = (p: Partial<SubDraft>) => setForm({ ...f, ...p });
+  const accounts = useFinance.getState().accounts;
   const cents = parseAmount(price);
   const invalid = !f.name.trim() || cents === null || cents < 0;
   const matches = query.trim() ? SERVICES.filter((s) => s.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6) : [];
@@ -476,17 +503,7 @@ function SubDialog({ draft, onClose }: { draft: SubDraft | null; onClose: () => 
               </div>
             )}
           </Field>
-          <Field label="Billed">
-            {(id) => (
-              <Select id={id} value={f.cycle} onChange={(e) => patch({ cycle: e.target.value as Cycle })}>
-                {(Object.keys(CYCLES) as Cycle[]).map((c) => (
-                  <option key={c} value={c}>
-                    {CYCLES[c].label}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
+          <CycleField label="Billed" value={f} onChange={(r) => patch({ cycle: r.cycle, every: r.every })} />
         </div>
 
         <Field label="Status">
@@ -531,8 +548,19 @@ function SubDialog({ draft, onClose }: { draft: SubDraft | null; onClose: () => 
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Paid with">{(id) => <Input id={id} value={f.paidWith ?? ""} onChange={(e) => patch({ paidWith: e.target.value })} placeholder="e.g. Visa ••4242" />}</Field>
-          <Field label="Website">{(id) => <Input id={id} type="url" value={f.url ?? ""} onChange={(e) => patch({ url: e.target.value })} placeholder="https://" />}</Field>
+          <Field label="Paid from (in Finances)">
+            {(id) => (
+              <Select id={id} value={f.accountId ?? accounts[0]?.id ?? ""} onChange={(e) => patch({ accountId: e.target.value })} disabled={!accounts.length}>
+                {accounts.length ? accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                )) : <option value="">No accounts yet</option>}
+              </Select>
+            )}
+          </Field>
         </div>
+        <Field label="Website">{(id) => <Input id={id} type="url" value={f.url ?? ""} onChange={(e) => patch({ url: e.target.value })} placeholder="https://" />}</Field>
 
         <Field label="Color">{() => <ColorPicker value={f.color} onChange={(color) => patch({ color })} />}</Field>
         <Field label="Notes">{(id) => <Textarea id={id} value={f.notes ?? ""} onChange={(e) => patch({ notes: e.target.value })} placeholder="Shared with family, plan name, how to cancel…" />}</Field>

@@ -4,7 +4,7 @@ import type { ReminderPrefs } from "@/store/settings";
 import { expandEvents, formatDuration, formatTime, toMinutes, type CalendarEvent, type Task } from "@/modules/calendar/store";
 import type { Plan } from "@/modules/calendar/scheduler";
 import { billDates, type Bill } from "@/modules/finances/store";
-import { CYCLES, step, type Subscription } from "@/modules/subscriptions/store";
+import { perLabel, step, type Subscription } from "@/modules/subscriptions/store";
 import { KINDS, type Release } from "@/modules/releases/store";
 
 export type Reminder = {
@@ -88,10 +88,10 @@ export function upcomingReminders(input: {
   if (prefs.subscriptions)
     for (const s of input.subs) {
       if (s.status === "trial" && s.trialEnds && s.trialEnds >= from && s.trialEnds <= dayKey(addDays(parseDay(to), 1)))
-        add({ key: `trial:${s.id}:${s.trialEnds}`, at: at(s.trialEnds, MORNING - 24 * 60), title: `Your ${s.name} trial ends tomorrow`, body: `After that it's ${money(s.price)} per ${CYCLES[s.cycle].per}` });
+        add({ key: `trial:${s.id}:${s.trialEnds}`, at: at(s.trialEnds, MORNING - 24 * 60), title: `Your ${s.name} trial ends tomorrow`, body: `After that it's ${money(s.price)} per ${perLabel(s)}` });
       if (s.status !== "active") continue;
       let d = parseDay(s.renews);
-      for (let i = 0; dayKey(d) <= dayKey(addDays(parseDay(to), 1)) && i < 1000; i++, d = step(d, s.cycle))
+      for (let i = 0; dayKey(d) <= dayKey(addDays(parseDay(to), 1)) && i < 1000; i++, d = step(d, s))
         if (dayKey(d) >= from)
           add({ key: `renew:${s.id}:${dayKey(d)}:${s.price}`, at: at(dayKey(d), MORNING - 24 * 60), title: `${s.name} renews tomorrow`, body: money(s.price) });
     }

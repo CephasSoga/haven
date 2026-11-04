@@ -8,7 +8,8 @@ import { parseDay, todayKey } from "@/lib/dates";
 import { centsToInput, currencySymbol, parseAmount, useMoney } from "@/lib/money";
 import { cn, swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
-import { CYCLES, daysUntil, whenLabel, type Cycle } from "@/modules/subscriptions/store";
+import { cycleLabel, daysUntil, perMonth as perMonthOf, whenLabel } from "@/modules/subscriptions/store";
+import { CycleField } from "@/modules/subscriptions/CycleField";
 import { categoryIcon } from "./icons";
 import { useFinance, type Bill } from "./store";
 
@@ -35,7 +36,7 @@ export function BillsTab({ onEdit }: { onEdit: (b: BillDraft) => void }) {
 
   const overdue = sorted.filter((b) => daysUntil(b.due) < 0);
   const next30 = sorted.filter((b) => daysUntil(b.due) <= 30);
-  const perMonth = bills.reduce((s, b) => s + CYCLES[b.cycle].perMonth(b.amount), 0);
+  const perMonth = bills.reduce((s, b) => s + perMonthOf(b, b.amount), 0);
   const fresh = () =>
     newBillDraft(accounts[0]?.id ?? "", (categories.find((c) => c.id === "utilities") ?? categories.find((c) => c.kind === "expense"))?.id ?? "");
 
@@ -108,7 +109,7 @@ export function BillsTab({ onEdit }: { onEdit: (b: BillDraft) => void }) {
                     <span className="block truncate text-[13px] text-muted">
                       <span className={cn(late && "font-medium text-neg", soon && "font-medium text-[#b7791f]")}>{dueLabel(b.due)}</span>
                       {" · "}
-                      {format(parseDay(b.due), "MMM d")} · {CYCLES[b.cycle].label.toLowerCase()} · {accById.get(b.accountId)?.name ?? "No account"}
+                      {format(parseDay(b.due), "MMM d")} · {cycleLabel(b).toLowerCase()} · {accById.get(b.accountId)?.name ?? "No account"}
                     </span>
                   </span>
                   <span className="font-medium tabular">{money(b.amount)}</span>
@@ -227,17 +228,7 @@ export function BillDialog({ draft, onClose }: { draft: BillDraft | null; onClos
           <Field label={`Amount (${currencySymbol(currency)})`}>
             {(id) => <Input id={id} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.,\s]/g, ""))} placeholder="0" />}
           </Field>
-          <Field label="How often">
-            {(id) => (
-              <Select id={id} value={f.cycle} onChange={(e) => patch({ cycle: e.target.value as Cycle })}>
-                {Object.entries(CYCLES).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v.label}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
+          <CycleField label="How often" value={f} onChange={(r) => patch({ cycle: r.cycle, every: r.every })} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Next due">{(id) => <Input id={id} type="date" value={f.due} onChange={(e) => e.target.value && patch({ due: e.target.value })} />}</Field>
