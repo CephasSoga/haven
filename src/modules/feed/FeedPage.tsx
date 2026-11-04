@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, ArrowUpRight, BookmarkCheck, BookmarkPlus, Check, Layers, Newspaper, Plus, RefreshCw, Rss, Settings2, Sparkles, X } from "lucide-react";
 import { Link } from "react-router";
 import { Button, Card, Field, Input, Modal, PageHeader, Select, Switch } from "@/components/ui";
-import { useAi } from "@/lib/ai";
+import { useAiReady, useAssistant } from "@/lib/ai";
 import { parseDay, todayKey } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { useNotes } from "@/modules/notes/store";
@@ -226,7 +226,7 @@ function EditionView({ edition, regionLabel, onPatch }: { edition: Edition; regi
 
       <p className="text-center text-[12px] text-faint">
         Gathered from Google News, Bing News{useFeed.getState().sources.length ? " and your feeds" : ""}
-        {edition.via === "claude" ? " · overview written by Claude from these headlines" : ""}. Open the source before relying on a detail.
+        {edition.via === "claude" ? ` · overview written by ${edition.writer ?? "Claude"} from these headlines` : ""}. Open the source before relying on a detail.
       </p>
     </div>
   );
@@ -510,7 +510,8 @@ function Preferences() {
 
 function CustomizeDialog({ open, onClose, onApply }: { open: boolean; onClose: () => void; onApply: () => void }) {
   const f = useFeed();
-  const hasKey = useAi((s) => !!s.apiKey.trim());
+  const hasKey = useAiReady();
+  const ai = useAssistant();
   return (
     <Modal
       open={open}
@@ -554,13 +555,13 @@ function CustomizeDialog({ open, onClose, onApply }: { open: boolean; onClose: (
         </div>
         <Switch label="Prepare a new edition automatically each morning" checked={f.auto} onChange={(v) => f.setPrefs({ auto: v })} />
         <div className="rounded-2xl border border-line p-4">
-          <Switch label="Add a written overview by Claude (optional)" checked={f.aiBrief && hasKey} onChange={(v) => f.setPrefs({ aiBrief: v })} />
+          <Switch label={`Add a written overview by ${ai} (optional)`} checked={f.aiBrief && hasKey} onChange={(v) => f.setPrefs({ aiBrief: v })} />
           <p className="mt-2 text-[13px] text-muted">
             {hasKey ? (
-              "Claude reads the morning's headlines and writes a short “In brief” summary plus why the biggest stories matter. Costs a fraction of a cent per edition."
+              `${ai} reads the morning's headlines and writes a short “In brief” summary plus why the biggest stories matter. Costs a fraction of a cent per edition.`
             ) : (
               <>
-                Needs an Anthropic API key —{" "}
+                Needs an AI key —{" "}
                 <Link to="/settings" onClick={onClose} className="font-medium text-cal hover:underline">
                   add one in Settings
                 </Link>

@@ -1,59 +1,119 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { inApp } from "@/lib/platform";
 
 /**
- * Haven's connection to Claude. The API key you enter stays in this browser and requests go
- * straight from here to Anthropic — there is no Haven server in between.
+ * Haven's connection to an AI model: Claude (Anthropic), GPT (OpenAI) or GPT-OSS on Groq, with
+ * your own API key. Keys stay in this browser and requests go straight to the service — there is
+ * no Haven server in between. The OpenAI and Groq keys are the same ones meeting transcription uses.
  */
 
-export const AI_MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5", hint: "Most capable" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", hint: "Faster, about half the cost" },
-] as const;
+export type AiProvider = "anthropic" | "openai" | "groq";
 
-export type AiModel = (typeof AI_MODELS)[number]["id"];
+export const AI_PROVIDERS: Record<
+  AiProvider,
+  { label: string; assistant: string; keyHint: string; keyUrl: string; models: { id: string; label: string; hint: string }[] }
+> = {
+  anthropic: {
+    label: "Anthropic",
+    assistant: "Claude",
+    keyHint: "sk-ant-…",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    models: [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", hint: "Most capable" },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", hint: "Faster, about half the cost" },
+    ],
+  },
+  openai: {
+    label: "OpenAI",
+    assistant: "GPT",
+    keyHint: "sk-…",
+    keyUrl: "https://platform.openai.com/api-keys",
+    models: [
+      { id: "gpt-6-astra", label: "GPT-6 Astra", hint: "Most capable" },
+      { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", hint: "Nearly as good, much cheaper" },
+      { id: "gpt-6-luna", label: "GPT-6 Luna", hint: "Cheapest, for simple jobs" },
+    ],
+  },
+  groq: {
+    label: "Groq",
+    assistant: "GPT-OSS",
+    keyHint: "gsk_…",
+    keyUrl: "https://console.groq.com/keys",
+    models: [
+      { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", hint: "Most capable on Groq" },
+      { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B", hint: "Fastest and cheapest" },
+    ],
+  },
+};
 
 type AiState = {
-  apiKey: string;
-  model: AiModel;
-  set: (patch: Partial<Pick<AiState, "apiKey" | "model">>) => void;
+  provider: AiProvider;
+  keys: Record<AiProvider, string>;
+  /** The model chosen for each service */
+  models: Record<AiProvider, string>;
+  set: (patch: Partial<Pick<AiState, "provider">>) => void;
+  setKey: (provider: AiProvider, key: string) => void;
+  setModel: (provider: AiProvider, model: string) => void;
 };
+
+const defaultModels = () => Object.fromEntries((Object.keys(AI_PROVIDERS) as AiProvider[]).map((p) => [p, AI_PROVIDERS[p].models[0].id])) as Record<AiProvider, string>;
+
+/** Keys typed for meeting transcription before AI could use them too. */
+function transcriptionKeys(): Partial<Record<AiProvider, string>> {
+  try {
+    return JSON.parse(localStorage.getItem("haven:stt") ?? "{}").state?.keys ?? {};
+  } catch {
+    return {};
+  }
+}
 
 export const useAi = create<AiState>()(
   persist(
     (set) => ({
-      apiKey: "",
-      model: "claude-opus-5-5",
+      provider: "anthropic",
+      keys: { anthropic: "", openai: "", groq: "" },
+      models: defaultModels(),
       set: (patch) => set(patch),
+      setKey: (provider, key) => set((s) => ({ keys: { ...s.keys, [provider]: key } })),
+      setModel: (provider, model) => set((s) => ({ models: { ...s.models, [provider]: model } })),
     }),
-    { name: "haven:ai", version: 1 },
+    {
+      name: "haven:ai",
+      version: 2,
+      migrate: (persisted, version) => {
+        // Version 1 knew only Anthropic: { apiKey, model }.
+        if (version < 2) {
+          const old = persisted as { apiKey?: string; model?: string };
+          const stt = transcriptionKeys();
+          return {
+            provider: "anthropic",
+            keys: { anthropic: old.apiKey ?? "", openai: stt.openai ?? "", groq: stt.groq ?? "" },
+            models: { ...defaultModels(), ...(old.model ? { anthropic: old.model } : {}) },
+          } as unknown as AiState;
+        }
+        return persisted as AiState;
+      },
+    },
   ),
 );
 
+/** Whether the chosen service has a key, i.e. AI features can run. */
 export function aiReady() {
-  return !!useAi.getState().apiKey.trim();
+  const { provider, keys } = useAi.getState();
+  return !!keys[provider].trim();
 }
 
-export function client() {
-  const { apiKey } = useAi.getState();
-  if (!apiKey.trim()) throw new AiError("Add your Anthropic API key in Settings to use AI features.");
-  // This is a personal, local app: the key is the user's own and never leaves their device except to Anthropic.
-  return new Anthropic({ apiKey: apiKey.trim(), dangerouslyAllowBrowser: true });
-}
+export const useAiReady = () => useAi((s) => !!s.keys[s.provider].trim());
+
+/** "Claude", "GPT"… — for sentences like "Claude is reading the meeting". */
+export const useAssistant = () => useAi((s) => AI_PROVIDERS[s.provider].assistant);
+export const assistantName = () => AI_PROVIDERS[useAi.getState().provider].assistant;
 
 export class AiError extends Error {}
 
-/** Common request options: the chosen model, and a server-side fallback if a safety classifier declines. */
-export function baseRequest() {
-  return {
-    model: useAi.getState().model,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default" as const,
-  };
-}
-
-/** Turns SDK errors into sentences a person can act on. */
+/** Turns errors from any of the services into sentences a person can act on. */
 export function explain(error: unknown): string {
   if (error instanceof AiError) return error.message;
   if (error instanceof Anthropic.AuthenticationError) return "Anthropic didn't accept the API key. Check it in Settings.";
@@ -65,13 +125,116 @@ export function explain(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** A tiny request to confirm the key works. */
+/* ---------- Asking for a structured answer ---------- */
+
+export type JsonRequest = {
+  /** A short name for the answer's shape (OpenAI and Groq want one) */
+  name: string;
+  system: string;
+  user: string;
+  /** JSON Schema of the answer: every object closed (additionalProperties: false) with all its fields required */
+  schema: Record<string, unknown>;
+  /** How hard to think: low for sorting and summaries, higher for reading a whole meeting */
+  effort?: "low" | "medium" | "high";
+  maxTokens?: number;
+};
+
+/** Asks the chosen service for an answer in the given JSON shape, and returns it parsed. */
+export async function askJson<T>(req: JsonRequest): Promise<T> {
+  const { provider, keys, models } = useAi.getState();
+  const key = keys[provider].trim();
+  if (!key) throw new AiError(`Add your ${AI_PROVIDERS[provider].label} API key in Settings to use AI features.`);
+  const text = provider === "anthropic" ? await viaAnthropic(req, key, models.anthropic) : provider === "openai" ? await viaOpenAi(req, key, models.openai) : await viaGroq(req, key, models.groq);
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new AiError(`${AI_PROVIDERS[provider].assistant}'s answer couldn't be read. Try again.`);
+  }
+}
+
+async function viaAnthropic(req: JsonRequest, apiKey: string, model: string) {
+  // This is a personal, local app: the key is the user's own and never leaves their device except to Anthropic.
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  // Streaming keeps long inputs (a whole meeting) clear of request timeouts.
+  const res = await client.beta.messages
+    .stream({
+      model,
+      // If a safety classifier declines, the request is retried on a fallback model.
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      max_tokens: req.maxTokens ?? 16000,
+      output_config: { effort: req.effort ?? "medium", format: { type: "json_schema", schema: req.schema } },
+      system: req.system,
+      messages: [{ role: "user", content: req.user }],
+    })
+    .finalMessage();
+  if (res.stop_reason === "refusal") throw new AiError("Claude declined to do this.");
+  if (res.stop_reason === "max_tokens") throw new AiError("That was too long to handle in one go.");
+  return res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+}
+
+/** The apps send requests natively, so the services' browser rules (CORS) don't get in the way. */
+async function post(name: string, url: string, key: string, body: unknown) {
+  const doFetch = inApp ? (await import("@tauri-apps/plugin-http")).fetch : fetch;
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch {
+    throw new AiError(inApp ? `Couldn't reach ${name}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
+  }
+  if (res.ok) return res.json();
+  const detail = await res
+    .json()
+    .then((j: { error?: { message?: string } }) => j.error?.message)
+    .catch(() => undefined);
+  if (res.status === 401) throw new AiError(`${name} didn't accept the API key. Check it in Settings.`);
+  if (res.status === 404) throw new AiError(`${name} doesn't offer that model to your key${detail ? ` (${detail})` : ""}. Pick another model in Settings.`);
+  if (res.status === 429) throw new AiError(`Rate limited by ${name} — wait a minute and try again.`);
+  throw new AiError(`${name} answered ${res.status}${detail ? `: ${detail}` : ""}.`);
+}
+
+async function viaOpenAi(req: JsonRequest, key: string, model: string) {
+  type Out = { status?: string; incomplete_details?: { reason?: string }; output?: { type: string; content?: { type: string; text?: string; refusal?: string }[] }[] };
+  const res = (await post("OpenAI", "https://api.openai.com/v1/responses", key, {
+    model,
+    instructions: req.system,
+    input: req.user,
+    text: { format: { type: "json_schema", name: req.name, schema: req.schema, strict: true } },
+    reasoning: { effort: req.effort ?? "medium" },
+    max_output_tokens: req.maxTokens ?? 16000,
+  })) as Out;
+  const parts = (res.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []);
+  if (parts.some((p) => p.type === "refusal")) throw new AiError("GPT declined to do this.");
+  if (res.status === "incomplete" && res.incomplete_details?.reason === "max_output_tokens") throw new AiError("That was too long to handle in one go.");
+  return parts.map((p) => (p.type === "output_text" ? (p.text ?? "") : "")).join("");
+}
+
+async function viaGroq(req: JsonRequest, key: string, model: string) {
+  type Out = { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string } }[] };
+  const res = (await post("Groq", "https://api.groq.com/openai/v1/chat/completions", key, {
+    model,
+    messages: [
+      { role: "system", content: req.system },
+      { role: "user", content: req.user },
+    ],
+    response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
+    max_completion_tokens: Math.min(req.maxTokens ?? 16000, 65536),
+  })) as Out;
+  const choice = res.choices?.[0];
+  if (choice?.message?.refusal) throw new AiError("The model declined to do this.");
+  if (choice?.finish_reason === "length") throw new AiError("That was too long to handle in one go.");
+  return choice?.message?.content ?? "";
+}
+
+/** A tiny request to confirm the key and model work. */
 export async function testConnection() {
-  const res = await client().beta.messages.create({
-    ...baseRequest(),
-    max_tokens: 64,
-    output_config: { effort: "low" },
-    messages: [{ role: "user", content: "Reply with the single word: ready" }],
+  const out = await askJson<{ reply: string }>({
+    name: "ping",
+    system: "Answer in the requested format.",
+    user: "Reply with the single word: ready",
+    schema: { type: "object", additionalProperties: false, required: ["reply"], properties: { reply: { type: "string" } } },
+    effort: "low",
+    maxTokens: 1000,
   });
-  return res.content.some((b) => b.type === "text");
+  return typeof out.reply === "string";
 }

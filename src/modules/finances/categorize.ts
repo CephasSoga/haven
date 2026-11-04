@@ -1,4 +1,4 @@
-import { AiError, baseRequest, client } from "@/lib/ai";
+import { askJson } from "@/lib/ai";
 import type { Category, Rule, TxKind } from "./store";
 
 /**
@@ -61,49 +61,35 @@ export async function sortWithClaude(
 ): Promise<Map<number, string>> {
   const expense = categories.filter((c) => c.kind === "expense");
   const income = categories.filter((c) => c.kind === "income");
-  const res = await client().beta.messages.create({
-    ...baseRequest(),
-    max_tokens: 16000,
-    output_config: {
-      effort: "low",
-      format: {
-        type: "json_schema",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["assignments"],
-          properties: {
-            assignments: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["index", "category_id"],
-                properties: { index: { type: "integer" }, category_id: { type: "string", enum: categories.map((c) => c.id) } },
-              },
-            },
+  const parsed = await askJson<{ assignments: { index: number; category_id: string }[] }>({
+    name: "categories",
+    system: "You sort bank statement lines into a person's budget categories. Use the merchant name and amount. Money out only goes to expense categories, money in only to income categories. When unsure, use the 'Other' category of the right kind.",
+    user: [
+      `Expense categories: ${expense.map((c) => `${c.id} (${c.name})`).join(", ")}`,
+      `Income categories: ${income.map((c) => `${c.id} (${c.name})`).join(", ")}`,
+      "",
+      "Lines (index | money in/out | amount | description):",
+      ...lines.map((l) => `${l.index} | ${l.kind === "income" ? "in" : "out"} | ${(l.amount / 100).toFixed(2)} | ${l.description}`),
+    ].join("\n"),
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["assignments"],
+      properties: {
+        assignments: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["index", "category_id"],
+            properties: { index: { type: "integer" }, category_id: { type: "string", enum: categories.map((c) => c.id) } },
           },
         },
       },
     },
-    system:
-      "You sort bank statement lines into a person's budget categories. Use the merchant name and amount. Money out only goes to expense categories, money in only to income categories. When unsure, use the 'Other' category of the right kind.",
-    messages: [
-      {
-        role: "user",
-        content: [
-          `Expense categories: ${expense.map((c) => `${c.id} (${c.name})`).join(", ")}`,
-          `Income categories: ${income.map((c) => `${c.id} (${c.name})`).join(", ")}`,
-          "",
-          "Lines (index | money in/out | amount | description):",
-          ...lines.map((l) => `${l.index} | ${l.kind === "income" ? "in" : "out"} | ${(l.amount / 100).toFixed(2)} | ${l.description}`),
-        ].join("\n"),
-      },
-    ],
+    effort: "low",
+    maxTokens: 16000,
   });
-  if (res.stop_reason === "refusal") throw new AiError("Claude declined to sort these lines.");
-  const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-  const parsed = JSON.parse(text) as { assignments: { index: number; category_id: string }[] };
   const kindOf = new Map(lines.map((l) => [l.index, l.kind]));
   const byId = new Map(categories.map((c) => [c.id, c]));
   const out = new Map<number, string>();

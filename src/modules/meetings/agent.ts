@@ -1,5 +1,5 @@
 import { addDays, format } from "date-fns";
-import { AiError, baseRequest, client } from "@/lib/ai";
+import { AiError, askJson } from "@/lib/ai";
 import { dayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
 import { expandEvents, fromMinutes, PRIORITIES, TASK_TYPES, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
@@ -88,33 +88,14 @@ export async function analyze(meeting: Meeting): Promise<Analysis> {
     .filter(Boolean)
     .join("\n\n");
 
-  // Streaming keeps long transcripts clear of request timeouts.
-  const res = await client()
-    .beta.messages.stream({
-      ...baseRequest(),
-      max_tokens: 16000,
-      output_config: { effort: "high", format: { type: "json_schema", schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: "user", content: user }],
-    })
-    .finalMessage();
-
-  if (res.stop_reason === "refusal") throw new AiError("Claude declined to process this transcript.");
-  if (res.stop_reason === "max_tokens") throw new AiError("The meeting was too long to summarise in one go.");
-  const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-  let raw: {
+  const raw = await askJson<{
     title: string;
     summary: string;
     decisions: string[];
     action_items: { title: string; owner: string | null; mine: boolean; due: string | null; duration_minutes: number; priority: Priority; type: string }[];
     events: { title: string; date: string; start: string | null; end: string | null; location: string | null; notes: string | null }[];
     open_questions: string[];
-  };
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new AiError("Claude's answer couldn't be read. Try again.");
-  }
+  }>({ name: "meeting_notes", system: SYSTEM, user, schema: SCHEMA, effort: "high", maxTokens: 16000 });
 
   const isDate = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
   const isTime = (t: string | null) => !!t && /^\d{2}:\d{2}$/.test(t);
@@ -191,24 +172,15 @@ export async function correctTranscript(meeting: Meeting): Promise<Meeting["segm
     .filter(Boolean)
     .join("\n\n");
 
-  const res = await client()
-    .beta.messages.stream({
-      ...baseRequest(),
-      max_tokens: 64000,
-      output_config: { effort: "medium", format: { type: "json_schema", schema: FIX_SCHEMA } },
-      system: FIX_SYSTEM,
-      messages: [{ role: "user", content: user }],
-    })
-    .finalMessage();
-
-  if (res.stop_reason === "refusal") throw new AiError("Claude declined to correct this transcript.");
-  if (res.stop_reason === "max_tokens") throw new AiError("The transcript was too long to correct in one go.");
-  let fixes: { line: number; text: string }[];
-  try {
-    fixes = JSON.parse(res.content.map((b) => (b.type === "text" ? b.text : "")).join("")).fixes;
-  } catch {
-    throw new AiError("Claude's answer couldn't be read. Try again.");
-  }
+  const { fixes } = await askJson<{ fixes: { line: number; text: string }[] }>({
+    name: "transcript_fixes",
+    system: FIX_SYSTEM,
+    user,
+    schema: FIX_SCHEMA,
+    effort: "medium",
+    // Groq's models stop at about 65,000 tokens of answer; Haven caps the request there.
+    maxTokens: 64000,
+  });
   const out = segments.map((s) => ({ ...s }));
   for (const f of fixes) {
     const s = out[f.line - 1];

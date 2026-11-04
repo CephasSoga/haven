@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import { aiReady, AiError, baseRequest, client } from "@/lib/ai";
+import { AiError, aiReady, askJson, assistantName } from "@/lib/ai";
 import { todayKey } from "@/lib/dates";
 import { uid } from "@/lib/utils";
 import { fetchFeed, REGIONS, TOPICS, urls, type Candidate, type Region, type Topic } from "./sources";
@@ -243,48 +243,35 @@ async function enrich(items: FeedItem[], region: Region) {
 async function brief(edition: Edition): Promise<Partial<Edition>> {
   const label = new Map((edition.sections ?? []).map((s) => [s.id, s.label]));
   const top = [...edition.items].sort((a, b) => (b.coverage ?? 0) - (a.coverage ?? 0)).slice(0, 30);
-  const res = await client().beta.messages.create({
-    ...baseRequest(),
-    max_tokens: 4000,
-    output_config: {
-      effort: "low",
-      format: {
-        type: "json_schema",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["brief", "why"],
-          properties: {
-            brief: { type: "string", description: "3-5 sentence overview of this morning's news, most important first" },
-            why: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["id", "why"],
-                properties: { id: { type: "string" }, why: { type: "string", description: "One sentence: why this matters" } },
-              },
-            },
+  const parsed = await askJson<{ brief: string; why: { id: string; why: string }[] }>({
+    name: "morning_brief",
+    system: "You write a calm, factual morning news overview for one reader, using only the headlines and summaries provided — never add facts that aren't in them. Write in the language most of the headlines are in.",
+    user: [
+      `Today is ${format(new Date(), "EEEE d MMMM yyyy")}. Headlines (id | section | outlets covering | headline — summary):`,
+      ...top.map((i) => `${i.id} | ${label.get(i.interestId) ?? ""} | ${i.coverage ?? 1} | ${i.title}${i.summary ? ` — ${i.summary}` : ""}`),
+      "",
+      "Write the overview, and a 'why it matters' sentence for the 8 most significant stories.",
+    ].join("\n"),
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["brief", "why"],
+      properties: {
+        brief: { type: "string", description: "3-5 sentence overview of this morning's news, most important first" },
+        why: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "why"],
+            properties: { id: { type: "string" }, why: { type: "string", description: "One sentence: why this matters" } },
           },
         },
       },
     },
-    system:
-      "You write a calm, factual morning news overview for one reader, using only the headlines and summaries provided — never add facts that aren't in them. Write in the language most of the headlines are in.",
-    messages: [
-      {
-        role: "user",
-        content: [
-          `Today is ${format(new Date(), "EEEE d MMMM yyyy")}. Headlines (id | section | outlets covering | headline — summary):`,
-          ...top.map((i) => `${i.id} | ${label.get(i.interestId) ?? ""} | ${i.coverage ?? 1} | ${i.title}${i.summary ? ` — ${i.summary}` : ""}`),
-          "",
-          "Write the overview, and a 'why it matters' sentence for the 8 most significant stories.",
-        ].join("\n"),
-      },
-    ],
+    effort: "low",
+    maxTokens: 4000,
   });
-  if (res.stop_reason === "refusal") return {};
-  const parsed = JSON.parse(res.content.map((b) => (b.type === "text" ? b.text : "")).join("")) as { brief: string; why: { id: string; why: string }[] };
   const why = new Map(parsed.why.map((w) => [w.id, w.why]));
-  return { brief: parsed.brief, items: edition.items.map((i) => (why.has(i.id) ? { ...i, why: why.get(i.id) } : i)), via: "claude" };
+  return { brief: parsed.brief, items: edition.items.map((i) => (why.has(i.id) ? { ...i, why: why.get(i.id) } : i)), via: "claude", writer: assistantName() };
 }

@@ -25,7 +25,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Segmented, Select, Textarea } from "@/components/ui";
-import { explain, useAi } from "@/lib/ai";
+import { explain, useAiReady, useAssistant } from "@/lib/ai";
 import { cn } from "@/lib/utils";
 import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
 import { addEvent, addTask, analyze, todayLabel, writeNotesPage } from "./agent";
@@ -33,7 +33,7 @@ import { LANGUAGES, speechSupported, useSpeech } from "./speech";
 import { localMicSupported, MeetingCapture, meetingCaptureSupported, prepareModel, queued } from "./capture";
 import { countClips, deleteMeetingClips } from "./clips";
 import { improveTranscript, useImprove } from "./improve";
-import { cloudStt, STT_PROVIDERS, useStt } from "./stt";
+import { cloudStt, STT_PROVIDERS, useCloudStt } from "./stt";
 import { clock, parseTranscript, useMeetings, type Meeting } from "./store";
 
 export function MeetingsPage() {
@@ -60,7 +60,7 @@ export function MeetingsPage() {
             <EmptyState
               icon={<Mic className="size-5" />}
               title="No meetings yet"
-              body="Start one when a call begins. Haven listens, then Claude turns it into notes, tasks and events."
+              body="Start one when a call begins. Haven listens, then AI turns it into notes, tasks and events."
               action={<Button onClick={() => select(create())}><Plus className="size-4" /> New meeting</Button>}
             />
           ) : (
@@ -101,7 +101,7 @@ export function MeetingsPage() {
               </div>
               <div className="font-serif text-3xl">Your meeting companion</div>
               <p className="mt-2 max-w-md text-[14px] text-muted">
-                Start a meeting and let Haven listen. Afterwards, Claude writes the notes and proposes tasks and events — you choose what goes into your planner.
+                Start a meeting and let Haven listen. Afterwards, AI writes the notes and proposes tasks and events — you choose what goes into your planner.
               </p>
               <Button variant="primary" className="mt-6" onClick={() => select(create())}>
                 <Plus className="size-4" /> New meeting
@@ -118,7 +118,8 @@ export function MeetingsPage() {
 
 function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: () => void; onDelete: () => void }) {
   const { update, addSegment, setLanguage, mode, setMode } = useMeetings();
-  const hasKey = useAi((s) => !!s.apiKey.trim());
+  const hasKey = useAiReady();
+  const ai = useAssistant();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pasting, setPasting] = useState(false);
@@ -134,7 +135,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const [starting, setStarting] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [backlog, setBacklog] = useState(0);
-  const cloudProvider = useStt((s) => (s.provider !== "device" && s.keys[s.provider]?.trim() ? s.provider : null));
+  const cloudProvider = useCloudStt();
 
   const elapsed = () => meeting.recorded + (sessionStart.current ? Date.now() - sessionStart.current : 0);
   const speech = useSpeech(meeting.language, (text) => addSegment(meeting.id, { at: elapsed(), text }));
@@ -425,7 +426,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
         <Textarea
           value={meeting.myNotes}
           onChange={(e) => update(meeting.id, { myNotes: e.target.value })}
-          placeholder="Anything you want Claude to know — names, context, what matters to you…"
+          placeholder={`Anything you want ${ai} to know — names, context, what matters to you…`}
           className="min-h-24 border-0 bg-transparent px-0 shadow-none focus:ring-0"
         />
       </Card>
@@ -434,11 +435,11 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="primary" className="h-11 px-5" onClick={run} disabled={busy || !hasKey || (!meeting.segments.length && !meeting.myNotes.trim())}>
           <Sparkles className={cn("size-4", busy && "animate-pulse")} />
-          {busy ? "Claude is reading the meeting…" : a ? "Regenerate notes & actions" : "Generate notes & actions"}
+          {busy ? `${ai} is reading the meeting…` : a ? "Regenerate notes & actions" : "Generate notes & actions"}
         </Button>
         {!hasKey && (
           <span className="text-[13px] text-muted">
-            Needs an Anthropic API key —{" "}
+            Needs an AI key —{" "}
             <Link to="/settings" className="font-medium text-cal hover:underline">
               add one in Settings
             </Link>
@@ -469,6 +470,7 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
 /* ---------- Improving the transcript ---------- */
 
 function ImproveRow({ meeting, hasKey }: { meeting: Meeting; hasKey: boolean }) {
+  const ai = useAssistant();
   const job = useImprove();
   const running = job.meetingId === meeting.id && !!job.step;
   const otherRunning = !!job.step && job.meetingId !== meeting.id;
@@ -494,12 +496,12 @@ function ImproveRow({ meeting, hasKey }: { meeting: Meeting; hasKey: boolean }) 
       : job.step === "transcribe"
         ? `Redoing the transcript on this device — ${job.done} of ${job.total}`
         : job.step === "correct"
-          ? "Claude is correcting what was misheard…"
+          ? `${ai} is correcting what was misheard…`
           : null;
 
   const plan = clips
-    ? `Redoes the transcript on this device with a more accurate model${hasKey ? ", then Claude fixes what was still misheard" : ""}. This takes a while — about as long as the speech itself, or longer on an older laptop.`
-    : "Claude reads the transcript and fixes what speech recognition misheard — names, numbers, words in other languages.";
+    ? `Redoes the transcript on this device with a more accurate model${hasKey ? `, then ${ai} fixes what was still misheard` : ""}. This takes a while — about as long as the speech itself, or longer on an older laptop.`
+    : `${ai} reads the transcript and fixes what speech recognition misheard — names, numbers, words in other languages.`;
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-line px-5 py-3.5">

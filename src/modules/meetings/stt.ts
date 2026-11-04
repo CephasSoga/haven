@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { inApp } from "@/lib/platform";
+import { useAi } from "@/lib/ai";
 
 /**
  * Optional cloud transcription. Claude can't take audio, so this is a separate service with its own
@@ -23,6 +24,7 @@ export const STT_PROVIDERS: { id: SttProvider; label: string; hint: string; keyU
 
 type SttState = {
   provider: SttProvider;
+  /** Keys typed here before AI shared them; they now live with the AI settings (useAi) */
   keys: Partial<Record<Exclude<SttProvider, "device">, string>>;
   set: (patch: Partial<Pick<SttState, "provider" | "keys">>) => void;
 };
@@ -41,10 +43,18 @@ export const useStt = create<SttState>()(
 
 /** The cloud service to use, when one is chosen and has a key. */
 export function cloudStt() {
-  const { provider, keys } = useStt.getState();
+  const { provider } = useStt.getState();
   if (provider === "device") return null;
-  const key = keys[provider]?.trim();
+  // The same OpenAI or Groq key as in Settings → AI.
+  const key = useAi.getState().keys[provider]?.trim();
   return key ? { provider, key } : null;
+}
+
+/** The cloud service transcribing meetings right now (it has a key), for showing on the page. */
+export function useCloudStt() {
+  const provider = useStt((s) => s.provider);
+  const hasKey = useAi((s) => provider !== "device" && !!s.keys[provider]?.trim());
+  return hasKey && provider !== "device" ? provider : null;
 }
 
 /** 16 kHz mono float samples → a 16-bit WAV file. */

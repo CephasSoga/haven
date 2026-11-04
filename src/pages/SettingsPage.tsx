@@ -14,7 +14,7 @@ import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
-import { AI_MODELS, explain, testConnection, useAi, type AiModel } from "@/lib/ai";
+import { AI_PROVIDERS, explain, testConnection, useAi, type AiProvider } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
 import { formatDistanceToNowStrict } from "date-fns";
@@ -245,30 +245,43 @@ export function SettingsPage() {
 }
 
 function AiSection() {
-  const { apiKey, model, set } = useAi();
+  const { provider, keys, models, set, setKey, setModel } = useAi();
   const [shown, setShown] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const info = AI_PROVIDERS[provider];
+  const key = keys[provider];
   return (
     <Section title="AI">
       <div className="flex gap-3 border-b border-line px-6 py-5 text-[13px] leading-relaxed text-muted">
         <Sparkles className="mt-0.5 size-4 shrink-0 text-cal" />
         <p>
-          The Meeting assistant uses Claude, and the Morning feed can add a written overview with it. Add your own Anthropic API key (from console.anthropic.com). It stays in this
-          browser and requests go straight to Anthropic; usage is billed to your Anthropic account — a meeting summary is typically a few cents.
+          AI writes your meeting notes, corrects transcripts, sorts imported bank lines and can add an overview to the Morning feed. Choose the service and add your own API
+          key: it stays in this browser, requests go straight to the service, and usage is billed to your account there — a meeting summary is typically a few cents.
         </p>
       </div>
-      <Row title="API key" hint={apiKey ? "Saved on this device" : "Not set"}>
+      <Row title="Service" hint={`Using ${info.assistant}, from ${info.label}`}>
+        <Segmented<AiProvider>
+          layoutId="ai-provider"
+          value={provider}
+          onChange={(p) => {
+            set({ provider: p });
+            setStatus(null);
+          }}
+          options={(Object.keys(AI_PROVIDERS) as AiProvider[]).map((p) => ({ value: p, label: AI_PROVIDERS[p].label }))}
+        />
+      </Row>
+      <Row title={`${info.label} API key`} hint={key ? `Saved on this device${provider === "anthropic" ? "" : " · also used for meeting transcription"}` : "Not set"}>
         <div className="flex gap-2">
           <div className="relative sm:w-72">
             <Input
               type={shown ? "text" : "password"}
-              value={apiKey}
+              value={key}
               onChange={(e) => {
-                set({ apiKey: e.target.value });
+                setKey(provider, e.target.value);
                 setStatus(null);
               }}
-              placeholder="sk-ant-…"
+              placeholder={info.keyHint}
               autoComplete="off"
               spellCheck={false}
               className="pr-10 font-mono text-[13px]"
@@ -278,7 +291,7 @@ function AiSection() {
             </button>
           </div>
           <Button
-            disabled={!apiKey.trim() || testing}
+            disabled={!key.trim() || testing}
             onClick={async () => {
               setTesting(true);
               try {
@@ -294,15 +307,28 @@ function AiSection() {
             {testing ? "Testing…" : "Test"}
           </Button>
         </div>
-        {status && (
+        {status ? (
           <div className={`mt-2 flex items-center gap-1.5 text-[13px] ${status.ok ? "text-pos" : "text-neg"}`}>
             {status.ok && <Check className="size-3.5" />} {status.text}
           </div>
+        ) : (
+          !key && (
+            <a href={info.keyUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[13px] font-medium text-cal hover:underline">
+              Get a key
+            </a>
+          )
         )}
       </Row>
-      <Row title="Model" hint="Opus is the most capable; Sonnet is faster and cheaper">
-        <Select value={model} onChange={(e) => set({ model: e.target.value as AiModel })} className="sm:w-60">
-          {AI_MODELS.map((m) => (
+      <Row title="Model" hint={info.models.find((m) => m.id === models[provider])?.hint ?? "The first is the most capable"}>
+        <Select
+          value={models[provider]}
+          onChange={(e) => {
+            setModel(provider, e.target.value);
+            setStatus(null);
+          }}
+          className="sm:w-80"
+        >
+          {info.models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label} — {m.hint}
             </option>
@@ -314,7 +340,9 @@ function AiSection() {
 }
 
 function TranscriptionSection() {
-  const { provider, keys, set } = useStt();
+  const { provider, set } = useStt();
+  const keys = useAi((s) => s.keys);
+  const setKey = useAi((s) => s.setKey);
   const [shown, setShown] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -325,7 +353,7 @@ function TranscriptionSection() {
       <div className="flex gap-3 border-b border-line px-6 py-5 text-[13px] leading-relaxed text-muted">
         <Mic className="mt-0.5 size-4 shrink-0 text-cal" />
         <p>
-          Claude can't listen to audio, so meetings are transcribed by a speech service. With an OpenAI key, each sentence's audio is sent to OpenAI as you record and
+          Meetings are transcribed by a speech service, separate from the AI above. With an OpenAI key, each sentence's audio is sent to OpenAI as you record and
           comes back accurately transcribed; without one, Haven transcribes on this device — private and free, but rough until you use “Improve transcript”. Keys stay in
           this browser and are billed to your own account.
         </p>
@@ -349,7 +377,7 @@ function TranscriptionSection() {
       {provider !== "device" && (
         <Row
           title="API key"
-          hint={key ? "Saved on this device" : `Not set — until it is, meetings are transcribed on this device`}
+          hint={key ? "Saved on this device · the same key as in AI" : `Not set — until it is, meetings are transcribed on this device`}
         >
           <div className="flex gap-2">
             <div className="relative sm:w-72">
@@ -357,7 +385,7 @@ function TranscriptionSection() {
                 type={shown ? "text" : "password"}
                 value={key}
                 onChange={(e) => {
-                  set({ keys: { ...keys, [provider]: e.target.value } });
+                  setKey(provider, e.target.value);
                   setStatus(null);
                 }}
                 placeholder={provider === "openai" ? "sk-…" : "gsk_…"}
@@ -391,7 +419,8 @@ function TranscriptionSection() {
               {status.ok && <Check className="size-3.5" />} {status.text}
             </div>
           ) : (
-            info.keyUrl && (
+            info.keyUrl &&
+            !key && (
               <a href={info.keyUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[13px] font-medium text-cal hover:underline">
                 Get a key
               </a>

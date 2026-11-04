@@ -42,7 +42,10 @@ export type Edition = {
   /** yyyy-MM-dd */
   date: string;
   generatedAt: number;
+  /** "claude": an AI wrote an overview (the name is historical — `writer` says which) */
   via: "news" | "claude" | "hackernews";
+  /** Which AI wrote the overview: "Claude", "GPT"… */
+  writer?: string;
   items: FeedItem[];
   sections?: Section[];
   /** A short written overview, when AI briefings are on */

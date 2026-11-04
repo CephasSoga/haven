@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { AlertTriangle, ArrowLeft, Check, FileUp, Sparkles } from "lucide-react";
 import { Button, Field, Modal, Segmented, Select, Switch } from "@/components/ui";
-import { explain, useAi } from "@/lib/ai";
+import { explain, useAiReady, useAssistant } from "@/lib/ai";
 import { useMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { guessCategory, ruleKeyFor, sortWithClaude, type Guess } from "./categorize";
@@ -29,7 +29,8 @@ const FORMATS = "CSV, OFX/QFX, QIF or CAMT.053 (XML)";
 
 export function ImportDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: (s: ImportSummary) => void }) {
   const { accounts, categories, transactions, rules, csvPresets, addTransactions, saveRule, savePreset } = useFinance();
-  const hasKey = useAi((s) => !!s.apiKey.trim());
+  const hasKey = useAiReady();
+  const ai = useAssistant();
   const money = useMoney();
   const [step, setStep] = useState<"pick" | "map" | "review">("pick");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
@@ -364,7 +365,7 @@ export function ImportDialog({ open, onClose, onDone }: { open: boolean; onClose
               <Sparkles className="size-4 shrink-0 text-cal" />
               <span className="flex-1">{unsorted.length} lines didn't match a known merchant.</span>
               <Button size="sm" onClick={sort} disabled={sorting}>
-                {sorting ? "Sorting…" : "Sort them with Claude"}
+                {sorting ? "Sorting…" : `Sort them with ${ai}`}
               </Button>
             </div>
           )}
