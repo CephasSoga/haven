@@ -11,8 +11,8 @@ import { swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { DayAgenda } from "@/modules/calendar/DayAgenda";
 import { EventDialog } from "@/modules/calendar/EventDialog";
-import { expandEvents, timeRange, useCalendar, type EventDraft, type TaskDraft } from "@/modules/calendar/store";
-import { buildBlocks, slotsUntilNow, usePlan, type Block } from "@/modules/calendar/plan";
+import { expandEvents, timeRange, toMinutes, useCalendar, type EventDraft, type TaskDraft } from "@/modules/calendar/store";
+import { buildBlocks, slotsUntilNow, useNow, usePlan, type Block } from "@/modules/calendar/plan";
 import { TaskDialog, newTaskDraft } from "@/modules/calendar/TaskDialog";
 import { TransactionDialog, type TxDraft } from "@/modules/finances/TransactionDialog";
 import { TxRow } from "@/modules/finances/parts";
@@ -52,9 +52,18 @@ export function TodayPage() {
   const [txDraft, setTxDraft] = useState<TxDraft | null>(null);
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
 
-  const now = new Date();
+  // Ticks every minute, so events leave the list once they're over.
+  const now = useNow();
   const today = todayKey();
-  const todays = useMemo(() => buildBlocks([parseDay(today)], events, tasks, plan).get(today) ?? [], [events, tasks, plan, today]);
+  const minute = now.getHours() * 60 + now.getMinutes();
+  const todays = useMemo(
+    () =>
+      // Finished events drop off: past their end, or an hour after the start when there's no end. All-day events stay.
+      (buildBlocks([parseDay(today)], events, tasks, plan).get(today) ?? []).filter(
+        (b) => b.kind !== "event" || !b.start || (b.end ? toMinutes(b.end) : toMinutes(b.start) + 60) > minute,
+      ),
+    [events, tasks, plan, today, minute],
+  );
   const upcoming = useMemo(() => {
     const days = Array.from({ length: 14 }, (_, i) => addDays(parseDay(today), i + 1));
     return [...expandEvents(events, days).values()].flat().filter((e) => e.start).slice(0, 5);
