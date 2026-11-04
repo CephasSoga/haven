@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { CalendarDays, Clapperboard, Library, Mic, Newspaper, NotebookPen, Repeat, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, Clapperboard, Library, MessagesSquare, Mic, Newspaper, NotebookPen, Repeat, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
 
 export type ModuleDef = {
   id: string;
@@ -17,6 +17,7 @@ export type ModuleDef = {
  * pieces (the block editor, the PDF reader) don't slow down the rest of the app.
  */
 export const MODULES: ModuleDef[] = [
+  { id: "assistant", name: "Assistant", path: "/assistant", icon: MessagesSquare, accent: "#8b5cf6", page: lazy(() => import("./assistant/AssistantPage").then((m) => ({ default: m.AssistantPage }))) },
   { id: "feed", name: "Morning", path: "/morning", icon: Newspaper, accent: "#c0583f", page: lazy(() => import("./feed/FeedPage").then((m) => ({ default: m.FeedPage }))) },
   { id: "calendar", name: "Calendar", path: "/calendar", icon: CalendarDays, accent: "var(--cal)", page: lazy(() => import("./calendar/CalendarPage").then((m) => ({ default: m.CalendarPage }))) },
   { id: "meetings", name: "Meetings", path: "/meetings", icon: Mic, accent: "var(--neg)", page: lazy(() => import("./meetings/MeetingsPage").then((m) => ({ default: m.MeetingsPage }))) },
