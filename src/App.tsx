@@ -11,6 +11,7 @@ import { useReminders } from "@/lib/notify";
 import { useReleaseChecker } from "@/modules/releases/check";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Notices } from "@/components/Notices";
+import { RecordingPill } from "@/modules/meetings/RecordingPill";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
 import { startSync, stopSync } from "@/lib/sync";
@@ -94,6 +95,7 @@ function Main() {
       </Shell>
       <ConfirmHost />
       <UpdateBanner />
+      <RecordingPill />
       <Notices />
     </HashRouter>
   );

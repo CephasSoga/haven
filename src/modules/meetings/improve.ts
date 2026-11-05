@@ -15,7 +15,7 @@ import { useMeetings, type Segment } from "./store";
  */
 
 type Step = "download" | "transcribe" | "correct";
-type ImproveState = { meetingId: string | null; step: Step | null; done: number; total: number; progress: number; error: string | null };
+type ImproveState = { meetingId: string | null; step: Step | null; done: number; total: number; progress: number; error: string | null; detail?: string };
 
 export const useImprove = create<ImproveState>(() => ({ meetingId: null, step: null, done: 0, total: 0, progress: 0, error: null }));
 
@@ -95,9 +95,9 @@ export async function improveTranscript(meetingId: string) {
       unloadModel("small");
     }
     if (aiReady()) {
-      set({ step: "correct" });
+      set({ step: "correct", detail: "" });
       const m = useMeetings.getState().meetings.find((x) => x.id === meetingId);
-      if (m?.segments.length) useMeetings.getState().update(meetingId, { segments: await correctTranscript(m) });
+      if (m?.segments.length) useMeetings.getState().update(meetingId, { segments: await correctTranscript(m, (detail) => set({ detail })) });
     }
     set({ meetingId: null, step: null });
   } catch (e) {

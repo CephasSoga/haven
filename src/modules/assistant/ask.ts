@@ -1,5 +1,5 @@
 import { addDays, format } from "date-fns";
-import { askJson, assistantName } from "@/lib/ai";
+import { askJson, assistantName, tokenBudget } from "@/lib/ai";
 import { dayKey, monthKey, todayKey } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { uid } from "@/lib/utils";
@@ -26,7 +26,14 @@ const SYSTEM = `You are the assistant inside Haven, a personal app with a calend
 - For a change to an existing event or task, give its complete new version, keeping the fields they didn't mention as they are.
 - Answer questions from the data provided; say so when it isn't there. Keep replies short, warm and plain, in the language the person writes in. Don't list the proposals in the reply — they're shown separately.`;
 
+/** How much of your data to include: all of it normally, a trimmed summary on a small per-minute allowance (Groq's free plan). */
+const sizes = () =>
+  tokenBudget() < 20000
+    ? { past: 3, ahead: 21, transactions: 12, notes: 20, preview: 40, turns: 6, answer: 2500 }
+    : { past: 14, ahead: 42, transactions: 40, notes: 80, preview: 80, turns: 12, answer: 8000 };
+
 function context() {
+  const size = sizes();
   const now = new Date();
   const today = todayKey();
   const { events, tasks } = useCalendar.getState();
@@ -36,7 +43,7 @@ function context() {
   const money = (c: number) => formatMoney(c, currency);
 
   // Events: the ones around now (every occurrence for the next 6 weeks), plus the series behind them.
-  const days = Array.from({ length: 56 }, (_, i) => addDays(now, i - 14));
+  const days = Array.from({ length: size.past + size.ahead }, (_, i) => addDays(now, i - size.past));
   const occurrences = [...expandEvents(events, days).values()].flat();
   const seen = new Set(occurrences.map((e) => e.id));
   const eventLines = events
@@ -56,7 +63,7 @@ function context() {
 
   const month = inMonth(transactions, monthKey(now));
   const spend = spendByCategory(month);
-  const recent = [...transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 40);
+  const recent = [...transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, size.transactions);
   const catName = new Map(categories.map((c) => [c.id, c.name]));
   const accName = new Map(accounts.map((a) => [a.id, a.name]));
 
@@ -76,8 +83,8 @@ function context() {
     `Latest transactions (date | kind | amount | category | account | note):\n${recent.map((t) => `${t.date} | ${t.kind} | ${money(t.amount)} | ${catName.get(t.categoryId) ?? "—"} | ${accName.get(t.accountId) ?? "—"} | ${t.note ?? ""}`).join("\n") || "(none)"}`,
     "",
     `NOTES (id | title | beginning):\n${notes
-      .slice(0, 80)
-      .map((n) => `${n.id} | ${n.title || "Untitled"} | ${n.body.replace(/\s+/g, " ").slice(0, 80)}`)
+      .slice(0, size.notes)
+      .map((n) => `${n.id} | ${n.title || "Untitled"} | ${n.body.replace(/\s+/g, " ").slice(0, size.preview)}`)
       .join("\n") || "(none)"}`,
   ]
     .filter((l) => typeof l === "string")
@@ -86,7 +93,7 @@ function context() {
 
 function conversation(history: ChatMessage[]) {
   return history
-    .slice(-12)
+    .slice(-sizes().turns)
     .map((m) => {
       if (m.role === "user") return `Person: ${m.text}`;
       const done = (m.proposals ?? []).map((p) => `${p.action.kind} (${p.status})`).join(", ");
@@ -111,7 +118,7 @@ export async function send(text: string) {
       ].join("\n"),
       schema: ANSWER_SCHEMA,
       effort: "medium",
-      maxTokens: 8000,
+      maxTokens: sizes().answer,
     });
     const proposals: Proposal[] = (answer.actions ?? []).map((action) => {
       const problem = problemWith(action);

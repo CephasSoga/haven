@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import { inApp } from "@/lib/platform";
 
 /**
@@ -29,25 +28,35 @@ function ctor(): RecognitionCtor | undefined {
 // Inside the installed apps the system web view has no speech service; on-device Whisper is used instead.
 export const speechSupported = () => !inApp && !!ctor();
 
-export function useSpeech(lang: string, onFinal: (text: string) => void) {
-  const [listening, setListening] = useState(false);
-  const [interim, setInterim] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const rec = useRef<Recognition | null>(null);
-  const wanted = useRef(false);
-  const final = useRef(onFinal);
-  final.current = onFinal;
+/**
+ * Listens with the browser's speech recognition until stopped. It isn't tied to any screen, so a
+ * meeting keeps being transcribed while you use the rest of Haven.
+ */
+export class BrowserSpeech {
+  private rec: Recognition | null = null;
+  private wanted = false;
+
+  constructor(
+    private opts: {
+      lang: string;
+      onFinal: (text: string) => void;
+      onInterim: (text: string) => void;
+      /** Something went wrong; `fatal` means listening has stopped for good */
+      onError: (message: string, fatal: boolean) => void;
+      /** Listening ended (stopped by you, or after a fatal error) */
+      onEnd: () => void;
+    },
+  ) {}
 
   /** Returns false when listening couldn't even begin. */
-  const start = (): boolean => {
+  start(): boolean {
     const Ctor = ctor();
     if (!Ctor) {
-      setError("Live transcription needs Chrome or Edge. You can still import or paste a transcript.");
+      this.opts.onError("Live transcription needs Chrome or Edge. You can still import or paste a transcript.", true);
       return false;
     }
-    setError(null);
     const r = new Ctor();
-    r.lang = lang;
+    r.lang = this.opts.lang;
     r.continuous = true;
     r.interimResults = true;
     r.onresult = (e) => {
@@ -56,60 +65,48 @@ export function useSpeech(lang: string, onFinal: (text: string) => void) {
         const res = e.results[i];
         if (res.isFinal) {
           const text = res[0].transcript.trim();
-          if (text) final.current(text);
+          if (text) this.opts.onFinal(text);
         } else pending += res[0].transcript;
       }
-      setInterim(pending);
+      this.opts.onInterim(pending);
     };
     r.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        wanted.current = false;
-        setError("Microphone access was blocked. Allow it in the browser's site settings, then try again.");
+        this.wanted = false;
+        this.opts.onError("Microphone access was blocked. Allow it in the browser's site settings, then try again.", true);
       } else if (e.error === "network") {
-        setError("The speech service couldn't be reached. Check your connection.");
+        this.opts.onError("The speech service couldn't be reached. Check your connection.", false);
       }
     };
+    // Recognition stops by itself after silence; while you're "listening" it's quietly restarted.
     r.onend = () => {
-      if (wanted.current) {
+      if (this.wanted) {
         try {
           r.start();
         } catch {
           /* already restarting */
         }
       } else {
-        setListening(false);
-        setInterim("");
+        this.opts.onInterim("");
+        this.opts.onEnd();
       }
     };
-    wanted.current = true;
-    rec.current = r;
+    this.wanted = true;
+    this.rec = r;
     try {
       r.start();
     } catch {
-      wanted.current = false;
-      setError("Live transcription couldn't start. Reload the page and try again.");
+      this.wanted = false;
+      this.opts.onError("Live transcription couldn't start. Reload the page and try again.", true);
       return false;
     }
-    setListening(true);
     return true;
-  };
+  }
 
-  const stop = () => {
-    wanted.current = false;
-    rec.current?.stop();
-    setListening(false);
-    setInterim("");
-  };
-
-  useEffect(
-    () => () => {
-      wanted.current = false;
-      rec.current?.abort();
-    },
-    [],
-  );
-
-  return { listening, interim, error, start, stop };
+  stop() {
+    this.wanted = false;
+    this.rec?.stop();
+  }
 }
 
 export const LANGUAGES = [

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { inApp } from "@/lib/platform";
+import { dismissNotice, showNotice } from "@/lib/notices";
 
 /**
  * Haven's connection to an AI model: Claude (Anthropic), GPT (OpenAI) or GPT-OSS on Groq, with
@@ -113,6 +114,17 @@ export const assistantName = () => AI_PROVIDERS[useAi.getState().provider].assis
 
 export class AiError extends Error {}
 
+/** A service's answer that wasn't a success, keeping its status and own explanation. */
+class ServiceError extends AiError {
+  constructor(
+    message: string,
+    public status: number,
+    public detail?: string,
+  ) {
+    super(message);
+  }
+}
+
 /** Turns errors from any of the services into sentences a person can act on. */
 export function explain(error: unknown): string {
   if (error instanceof AiError) return error.message;
@@ -123,6 +135,76 @@ export function explain(error: unknown): string {
   if (error instanceof Anthropic.APIConnectionError) return "Couldn't reach Anthropic. Check your internet connection.";
   if (error instanceof Anthropic.APIError) return `Anthropic error ${error.status ?? ""}: ${error.message}`;
   return error instanceof Error ? error.message : String(error);
+}
+
+/* ---------- Staying within a per-minute token allowance ---------- */
+
+/*
+ * Groq limits how many tokens each minute may use — 8,000 on its free plan — and counts the longest
+ * answer a request allows as well as what it sends. Haven learns the limit from Groq's refusals,
+ * paces requests to it, and long jobs (a whole meeting) send their text in consecutive pieces that
+ * each fit. Anthropic and OpenAI allow far more, so their requests go in one piece.
+ */
+
+const TPM_KEY = "haven:groq-tpm";
+let groqTpm = (() => {
+  try {
+    return Number(localStorage.getItem(TPM_KEY)) || 8000;
+  } catch {
+    return 8000;
+  }
+})();
+const spent: { at: number; tokens: number }[] = [];
+
+function learnGroqLimit(limit: number) {
+  groqTpm = limit;
+  try {
+    localStorage.setItem(TPM_KEY, String(limit));
+  } catch {
+    /* only an optimisation */
+  }
+}
+
+/** A rough count of the tokens a text takes (about 3–4 characters each). */
+export const estimateTokens = (text: string) => Math.ceil(text.length / 3.2);
+
+/** How many tokens one request may take in all (what's sent plus the answer) with the chosen service. */
+export function tokenBudget() {
+  return useAi.getState().provider === "groq" ? groqTpm : 200_000;
+}
+
+/** Waits, if need be, until the last minute's requests leave room for `tokens` more. */
+async function pace(tokens: number) {
+  for (;;) {
+    const now = Date.now();
+    while (spent.length && now - spent[0].at > 60_000) spent.shift();
+    const used = spent.reduce((sum, x) => sum + x.tokens, 0);
+    if (!spent.length || used + tokens <= groqTpm) break;
+    const wait = 60_000 - (now - spent[0].at) + 500;
+    showNotice({ id: "groq-wait", tone: "info", sticky: true, title: "Waiting for Groq", body: `Your Groq plan allows ${groqTpm.toLocaleString()} tokens a minute, so long jobs go in parts. Carrying on in about ${Math.ceil(wait / 1000)} s.` });
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  dismissNotice("groq-wait");
+  spent.push({ at: Date.now(), tokens });
+}
+
+/** Splits items into consecutive groups whose text comes to at most about `tokens` tokens each. */
+export function inPieces<T>(items: T[], text: (item: T) => string, tokens: number): T[][] {
+  const out: T[][] = [];
+  let piece: T[] = [];
+  let size = 0;
+  for (const item of items) {
+    const n = estimateTokens(text(item)) + 2;
+    if (piece.length && size + n > tokens) {
+      out.push(piece);
+      piece = [];
+      size = 0;
+    }
+    piece.push(item);
+    size += n;
+  }
+  if (piece.length) out.push(piece);
+  return out;
 }
 
 /* ---------- Asking for a structured answer ---------- */
@@ -187,10 +269,11 @@ async function post(name: string, url: string, key: string, body: unknown) {
     .json()
     .then((j: { error?: { message?: string } }) => j.error?.message)
     .catch(() => undefined);
-  if (res.status === 401) throw new AiError(`${name} didn't accept the API key. Check it in Settings.`);
-  if (res.status === 404) throw new AiError(`${name} doesn't offer that model to your key${detail ? ` (${detail})` : ""}. Pick another model in Settings.`);
-  if (res.status === 429) throw new AiError(`Rate limited by ${name} — wait a minute and try again.`);
-  throw new AiError(`${name} answered ${res.status}${detail ? `: ${detail}` : ""}.`);
+  const fail = (message: string) => new ServiceError(message, res.status, detail);
+  if (res.status === 401) throw fail(`${name} didn't accept the API key. Check it in Settings.`);
+  if (res.status === 404) throw fail(`${name} doesn't offer that model to your key${detail ? ` (${detail})` : ""}. Pick another model in Settings.`);
+  if (res.status === 429) throw fail(`Rate limited by ${name} — wait a minute and try again.`);
+  throw fail(`${name} answered ${res.status}${detail ? `: ${detail}` : ""}.`);
 }
 
 async function viaOpenAi(req: JsonRequest, key: string, model: string) {
@@ -209,17 +292,50 @@ async function viaOpenAi(req: JsonRequest, key: string, model: string) {
   return parts.map((p) => (p.type === "output_text" ? (p.text ?? "") : "")).join("");
 }
 
+/** "Limit 8000, Requested 12998" — from Groq's "tokens per minute" refusals. */
+function tokensPerMinute(detail?: string) {
+  const m = detail?.match(/tokens per minute[^]*?Limit\s*(\d+)[^]*?Requested\s*(\d+)/i);
+  return m ? { limit: Number(m[1]), requested: Number(m[2]) } : null;
+}
+
 async function viaGroq(req: JsonRequest, key: string, model: string) {
   type Out = { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string } }[] };
-  const res = (await post("Groq", "https://api.groq.com/openai/v1/chat/completions", key, {
-    model,
-    messages: [
-      { role: "system", content: req.system },
-      { role: "user", content: req.user },
-    ],
-    response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
-    max_completion_tokens: Math.min(req.maxTokens ?? 16000, 65536),
-  })) as Out;
+  const ask = (maxTokens: number) =>
+    post("Groq", "https://api.groq.com/openai/v1/chat/completions", key, {
+      model,
+      messages: [
+        { role: "system", content: req.system },
+        { role: "user", content: req.user },
+      ],
+      response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
+      max_completion_tokens: maxTokens,
+    }) as Promise<Out>;
+  const wanted = Math.min(req.maxTokens ?? 16000, 65536);
+  // Groq counts the longest answer allowed against the allowance, so allow only what fits.
+  let reading = estimateTokens(req.system + req.user + JSON.stringify(req.schema)) + 50;
+  let max = Math.max(1000, Math.min(wanted, groqTpm - reading - 256));
+  let res: Out;
+  for (let attempt = 0; ; attempt++) {
+    await pace(reading + max);
+    try {
+      res = await ask(max);
+      break;
+    } catch (e) {
+      const tpm = e instanceof ServiceError && (e.status === 413 || e.status === 429) ? tokensPerMinute(e.detail) : null;
+      if (!tpm) throw e;
+      if (attempt >= 2) throw new AiError(`Groq's per-minute token allowance (${tpm.limit.toLocaleString()} on your plan) is used up — wait a minute and try again.`);
+      learnGroqLimit(tpm.limit);
+      reading = Math.max(0, tpm.requested - max);
+      const room = tpm.limit - reading - 256;
+      if (room < 1000)
+        throw new AiError(
+          `This is more than your Groq plan allows in a minute (${tpm.limit.toLocaleString()} tokens; reading this alone takes about ${reading.toLocaleString()}). Try a shorter request, Groq's paid tier, or another AI service in Settings.`,
+        );
+      max = Math.min(wanted, room);
+      // It would have fitted: the minute's allowance was simply used up. Wait for it to refill.
+      if (tpm.requested <= tpm.limit) spent.push({ at: Date.now(), tokens: tpm.limit });
+    }
+  }
   const choice = res.choices?.[0];
   if (choice?.message?.refusal) throw new AiError("The model declined to do this.");
   if (choice?.finish_reason === "length") throw new AiError("That was too long to handle in one go.");

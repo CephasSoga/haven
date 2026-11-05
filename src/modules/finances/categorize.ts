@@ -1,4 +1,4 @@
-import { askJson } from "@/lib/ai";
+import { askJson, estimateTokens, inPieces, tokenBudget } from "@/lib/ai";
 import type { Category, Rule, TxKind } from "./store";
 
 /**
@@ -61,38 +61,45 @@ export async function sortWithClaude(
 ): Promise<Map<number, string>> {
   const expense = categories.filter((c) => c.kind === "expense");
   const income = categories.filter((c) => c.kind === "income");
-  const parsed = await askJson<{ assignments: { index: number; category_id: string }[] }>({
-    name: "categories",
-    system: "You sort bank statement lines into a person's budget categories. Use the merchant name and amount. Money out only goes to expense categories, money in only to income categories. When unsure, use the 'Other' category of the right kind.",
-    user: [
-      `Expense categories: ${expense.map((c) => `${c.id} (${c.name})`).join(", ")}`,
-      `Income categories: ${income.map((c) => `${c.id} (${c.name})`).join(", ")}`,
-      "",
-      "Lines (index | money in/out | amount | description):",
-      ...lines.map((l) => `${l.index} | ${l.kind === "income" ? "in" : "out"} | ${(l.amount / 100).toFixed(2)} | ${l.description}`),
-    ].join("\n"),
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["assignments"],
-      properties: {
-        assignments: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["index", "category_id"],
-            properties: { index: { type: "integer" }, category_id: { type: "string", enum: categories.map((c) => c.id) } },
+  const row = (l: (typeof lines)[number]) => `${l.index} | ${l.kind === "income" ? "in" : "out"} | ${(l.amount / 100).toFixed(2)} | ${l.description}`;
+  // Long statements go in consecutive batches that each fit the AI service's allowance.
+  const room = Math.max(600, Math.floor((tokenBudget() - 2500 - estimateTokens(categories.map((c) => `${c.id} (${c.name})`).join(", "))) / 2));
+  const assignments: { index: number; category_id: string }[] = [];
+  for (const piece of inPieces(lines, row, room)) {
+    const parsed = await askJson<{ assignments: { index: number; category_id: string }[] }>({
+      name: "categories",
+      system: "You sort bank statement lines into a person's budget categories. Use the merchant name and amount. Money out only goes to expense categories, money in only to income categories. When unsure, use the 'Other' category of the right kind.",
+      user: [
+        `Expense categories: ${expense.map((c) => `${c.id} (${c.name})`).join(", ")}`,
+        `Income categories: ${income.map((c) => `${c.id} (${c.name})`).join(", ")}`,
+        "",
+        "Lines (index | money in/out | amount | description):",
+        ...piece.map(row),
+      ].join("\n"),
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["assignments"],
+        properties: {
+          assignments: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["index", "category_id"],
+              properties: { index: { type: "integer" }, category_id: { type: "string", enum: categories.map((c) => c.id) } },
+            },
           },
         },
       },
-    },
-    effort: "low",
-    maxTokens: 16000,
-  });
+      effort: "low",
+      maxTokens: 16000,
+    });
+    assignments.push(...parsed.assignments);
+  }
   const kindOf = new Map(lines.map((l) => [l.index, l.kind]));
   const byId = new Map(categories.map((c) => [c.id, c]));
   const out = new Map<number, string>();
-  for (const a of parsed.assignments) if (byId.get(a.category_id)?.kind === kindOf.get(a.index)) out.set(a.index, a.category_id);
+  for (const a of assignments) if (byId.get(a.category_id)?.kind === kindOf.get(a.index)) out.set(a.index, a.category_id);
   return out;
 }
