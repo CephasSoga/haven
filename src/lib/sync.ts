@@ -13,6 +13,7 @@ import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
+import { useFocus } from "@/modules/focus/store";
 import { readVaultFile, useVault, type VaultFile } from "@/modules/vault/store";
 import { readDecisionsFile, useDecisions, type DecisionsFile } from "@/modules/decisions/store";
 
@@ -39,6 +40,7 @@ const STORES: Record<string, PersistedStore> = {
   "haven:meetings": useMeetings,
   "haven:subscriptions": useSubscriptions,
   "haven:releases": useReleases,
+  "haven:focus": useFocus,
 };
 const VAULT = "haven:vault";
 /** Decisions travel like the vault: encrypted, and re-opened (or re-locked) when another device changes them. */

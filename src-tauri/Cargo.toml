@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 # The code Tauri generates from plugin settings in tauri.conf.json (the updater's) uses it.
 serde_json = "1"
 tauri-plugin-http = "2"
@@ -24,6 +24,9 @@ tauri-plugin-process = "2"
 # Updating in place is a desktop feature; on Android the app points you to the new .apk instead.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+# Tray, starting with the computer, and one Haven at a time.
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 codegen-units = 1

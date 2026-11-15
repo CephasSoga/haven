@@ -24,6 +24,8 @@ type SettingsState = {
   currency: string;
   weekStartsOn: 0 | 1;
   reminders: ReminderPrefs;
+  /** Windows app: closing the window keeps Haven in the tray (missing in older settings: on) */
+  runInBackground?: boolean;
   set: (patch: Partial<Omit<SettingsState, "set">>) => void;
 };
 

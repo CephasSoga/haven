@@ -8,10 +8,13 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { applyTheme, useSettings } from "@/store/settings";
 import { useMorningScheduler } from "@/modules/feed/scheduler";
 import { useReminders } from "@/lib/notify";
+import { useBackgroundMode } from "@/lib/desktop";
 import { useReleaseChecker } from "@/modules/releases/check";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Notices } from "@/components/Notices";
 import { RecordingPill } from "@/modules/meetings/RecordingPill";
+import { FocusPill } from "@/modules/focus/FocusPill";
+import { useFocusEngine } from "@/modules/focus/engine";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
 import { startSync, stopSync } from "@/lib/sync";
@@ -76,6 +79,8 @@ function Splash() {
 function Main() {
   useMorningScheduler();
   useReminders();
+  useBackgroundMode();
+  useFocusEngine();
   useReleaseChecker();
   return (
     <HashRouter>
@@ -96,6 +101,7 @@ function Main() {
       <ConfirmHost />
       <UpdateBanner />
       <RecordingPill />
+      <FocusPill />
       <Notices />
     </HashRouter>
   );

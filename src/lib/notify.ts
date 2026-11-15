@@ -8,6 +8,7 @@ import { useNow, usePlan } from "@/modules/calendar/plan";
 import { useFinance } from "@/modules/finances/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
+import { heldByFocus } from "@/modules/focus/store";
 
 type NotificationApi = typeof import("@tauri-apps/plugin-notification");
 let api: Promise<NotificationApi> | null = null;
@@ -74,7 +75,12 @@ async function scheduleOnPhone(list: Reminder[]) {
 function showDue(list: Reminder[], now: number) {
   const shown = new Set(readIds(SHOWN));
   // Anything more than two minutes late was missed while Haven was closed; skip it rather than pile up.
-  const due = list.filter((r) => r.at <= now && r.at > now - 2 * 60_000 && !shown.has(r.id));
+  // During a focus session, money and release reminders wait and arrive when it ends.
+  const due = list.filter((r) => {
+    if (r.at > now || shown.has(r.id)) return false;
+    const { hold, late } = heldByFocus(r.key, r.at, now);
+    return !hold && (r.at > now - 2 * 60_000 || late);
+  });
   if (!due.length) return;
   for (const r of due) {
     void notify(r.title, r.body);

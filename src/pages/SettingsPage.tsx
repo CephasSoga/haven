@@ -15,6 +15,7 @@ import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
 import { readDecisionsFile, useDecisions } from "@/modules/decisions/store";
+import { useFocus } from "@/modules/focus/store";
 import { AI_PROVIDERS, explain, testConnection, useAi, type AiProvider } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
@@ -24,6 +25,7 @@ import { STT_PROVIDERS, testStt, useStt, type SttProvider } from "@/modules/meet
 import { useEffect } from "react";
 import { askNotificationPermission, notificationPermission, notify, type Permission } from "@/lib/notify";
 import { APP_VERSION, inApp, onAndroid } from "@/lib/platform";
+import { onDesktopApp, setStartsWithComputer, startsWithComputer } from "@/lib/desktop";
 import { RELEASES, canUpdate, checkForUpdate, installUpdate, useUpdates } from "@/lib/updates";
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CAD", "XAF", "XOF", "NGN", "MAD", "JPY"];
@@ -86,6 +88,7 @@ export function SettingsPage() {
       meetings: { meetings: meetings.meetings },
       subscriptions: { subs: subscriptions.subs, dismissed: subscriptions.dismissed },
       releases: (({ kinds, genres, follows, platforms }) => ({ kinds, genres, follows, platforms }))(useReleases.getState()),
+      focus: (({ sessions, goal }) => ({ sessions, goal }))(useFocus.getState()),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -119,6 +122,7 @@ export function SettingsPage() {
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
       if (data.subscriptions?.subs) useSubscriptions.setState({ subs: data.subscriptions.subs, dismissed: data.subscriptions.dismissed ?? [] });
       if (data.releases?.genres) useReleases.setState({ kinds: data.releases.kinds, genres: data.releases.genres, follows: data.releases.follows ?? {}, platforms: data.releases.platforms ?? null });
+      if (data.focus?.sessions) useFocus.setState({ sessions: data.focus.sessions, goal: data.focus.goal ?? 180 });
       flash("Backup restored.");
     } catch (e) {
       flash(`Couldn't read that file: ${(e as Error).message}`);
@@ -142,6 +146,8 @@ export function SettingsPage() {
       <AiSection />
 
       <TranscriptionSection />
+
+      {onDesktopApp && <DesktopSection />}
 
       <Section title="Appearance">
         <Row title="Theme">
@@ -228,6 +234,7 @@ export function SettingsPage() {
               useSubscriptions.setState({ subs: [], dismissed: [] });
               useReleases.setState({ genres: { movie: [], tv: [], music: [], game: [] }, follows: {} });
               useFeed.setState({ interests: [], editions: [], error: null });
+              useFocus.setState({ active: null, breakUntil: null, review: null, sessions: [], quiet: null });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");
@@ -533,7 +540,7 @@ function RemindersSection() {
   const where = inApp
     ? onAndroid
       ? "Scheduled on your phone, so they arrive even when Haven is closed."
-      : "They arrive while Haven is open (it can stay minimized)."
+      : "They arrive while Haven is open, including when it's closed to the tray."
     : "They arrive while Haven is open in this browser.";
 
   return (
@@ -585,6 +592,42 @@ function RemindersSection() {
       </Row>
       <Row title="Releases" hint="At 9:00 on the day a movie, show, album or game you follow comes out">
         <Switch checked={prefs.releases !== false} onChange={(releases) => patch({ releases })} label={prefs.releases !== false ? "On" : "Off"} />
+      </Row>
+    </Section>
+  );
+}
+
+/** Windows app: keep running in the tray once closed, and open when the computer starts. */
+function DesktopSection() {
+  const background = useSettings((s) => s.runInBackground !== false);
+  const set = useSettings((s) => s.set);
+  const [atStartup, setAtStartup] = useState<boolean | null>(null);
+  const [problem, setProblem] = useState("");
+  useEffect(() => {
+    void startsWithComputer().then(setAtStartup);
+  }, []);
+
+  return (
+    <Section title="Desktop app">
+      <Row
+        title="Keep running when closed"
+        hint={background ? "Closing the window leaves Haven in the tray (near the clock), so reminders and focus timers keep going. Quit from the tray icon." : "Closing the window quits Haven; reminders stop until you open it again."}
+      >
+        <Switch checked={background} onChange={(runInBackground) => set({ runInBackground })} label={background ? "On" : "Off"} />
+      </Row>
+      <Row title="Open when the computer starts" hint={problem || "Haven starts quietly in the tray when you sign in to Windows."}>
+        <Switch
+          checked={!!atStartup}
+          onChange={async (on) => {
+            setProblem("");
+            try {
+              setAtStartup(await setStartsWithComputer(on));
+            } catch (e) {
+              setProblem(`Windows didn't accept the change: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }}
+          label={atStartup ? "On" : "Off"}
+        />
       </Row>
     </Section>
   );
