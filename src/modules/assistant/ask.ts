@@ -1,5 +1,5 @@
 import { addDays, format } from "date-fns";
-import { askJson, assistantName, tokenBudget } from "@/lib/ai";
+import { AiStopped, askJson, assistantName, tokenBudget } from "@/lib/ai";
 import { dayKey, monthKey, todayKey } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { uid } from "@/lib/utils";
@@ -7,7 +7,7 @@ import { useSettings } from "@/store/settings";
 import { expandEvents, useCalendar } from "@/modules/calendar/store";
 import { accountBalance, inMonth, spendByCategory, useFinance } from "@/modules/finances/store";
 import { useNotes } from "@/modules/notes/store";
-import { ANSWER_SCHEMA, problemWith, type Action } from "./actions";
+import { answerSchema, problemWith, type Action } from "./actions";
 import { useAssistant, type ChatMessage, type Proposal } from "./store";
 
 /**
@@ -102,11 +102,23 @@ function conversation(history: ChatMessage[]) {
     .join("\n");
 }
 
-/** Sends a message and adds the assistant's answer (or the reason it failed) to the conversation. */
-export async function send(text: string) {
+/** Requests in flight, by chat, so each can be stopped. */
+const inFlight = new Map<string, AbortController>();
+
+/** Stops a chat's request in progress. */
+export function stop(chatId: string) {
+  inFlight.get(chatId)?.abort();
+}
+
+/** Sends a message in a chat and adds the assistant's answer (or why it failed) to it. */
+export async function send(chatId: string, text: string) {
   const store = useAssistant.getState();
-  const history = store.messages;
-  store.add({ role: "user", text });
+  if (store.pending[chatId]) return;
+  const history = store.chats.find((c) => c.id === chatId)?.messages ?? [];
+  store.add(chatId, { role: "user", text });
+  const controller = new AbortController();
+  inFlight.set(chatId, controller);
+  store.setPending(chatId, true);
   try {
     const answer = await askJson<{ reply: string; actions: Action[] }>({
       name: "assistant_answer",
@@ -116,17 +128,23 @@ export async function send(text: string) {
         history.length ? `\nCONVERSATION SO FAR\n${conversation(history)}` : "",
         `\nTHE PERSON SAYS\n${text}`,
       ].join("\n"),
-      schema: ANSWER_SCHEMA,
-      effort: "medium",
+      schema: answerSchema(),
+      // A chat should answer quickly; lower effort is much faster and plenty for this.
+      effort: "low",
       maxTokens: sizes().answer,
+      signal: controller.signal,
+      timeoutMs: 90_000,
     });
     const proposals: Proposal[] = (answer.actions ?? []).map((action) => {
       const problem = problemWith(action);
       return { id: uid(), action, include: !problem, status: problem ? "skipped" : "pending", problem: problem ?? undefined };
     });
-    useAssistant.getState().add({ role: "assistant", text: answer.reply || (proposals.length ? "Here's what I'd do:" : "Done."), proposals: proposals.length ? proposals : undefined });
+    useAssistant.getState().add(chatId, { role: "assistant", text: answer.reply || (proposals.length ? "Here's what I'd do:" : "Done."), proposals: proposals.length ? proposals : undefined });
   } catch (e) {
-    useAssistant.getState().add({ role: "assistant", text: e instanceof Error ? e.message : String(e), error: true });
+    useAssistant.getState().add(chatId, { role: "assistant", text: e instanceof AiStopped ? "Stopped — nothing was changed." : e instanceof Error ? e.message : String(e), error: true });
+  } finally {
+    inFlight.delete(chatId);
+    useAssistant.getState().setPending(chatId, false);
   }
 }
 

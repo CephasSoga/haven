@@ -49,6 +49,33 @@ export const TASK_TYPES: Record<string, { label: string; color: string }> = {
   personal: { label: "Personal", color: "green" },
 };
 
+/** Every type of work: the built-in ones, then yours. */
+export function taskTypes(prefs?: Pick<PlannerPrefs, "taskTypes">): Record<string, TaskType> {
+  return { ...TASK_TYPES, ...(prefs ?? useCalendar.getState().prefs).taskTypes };
+}
+
+export const useTaskTypes = () => {
+  const custom = useCalendar((s) => s.prefs.taskTypes);
+  return { ...TASK_TYPES, ...custom } as Record<string, TaskType>;
+};
+
+/** Adds a type of work and returns its id. */
+export function addTaskType(label: string, color: string) {
+  const { prefs, setPrefs } = useCalendar.getState();
+  const id = `custom-${uid().slice(0, 8)}`;
+  setPrefs({ taskTypes: { ...prefs.taskTypes, [id]: { label: label.trim(), color } } });
+  return id;
+}
+
+/** Removes one of your types; tasks of that type become Admin. */
+export function removeTaskType(id: string) {
+  const { prefs, setPrefs } = useCalendar.getState();
+  const rest = { ...prefs.taskTypes };
+  delete rest[id];
+  setPrefs({ taskTypes: rest });
+  useCalendar.setState((s) => ({ tasks: s.tasks.map((t) => (t.type === id ? { ...t, type: "admin" } : t)) }));
+}
+
 export type Slot = { date: string; start: string; end: string };
 
 export type Task = {
@@ -106,9 +133,13 @@ export function rangesOf(h: Hours | undefined): [number, number][] {
   return out;
 }
 
+export type TaskType = { label: string; color: string };
+
 export type PlannerPrefs = {
   work: WeekHours;
   personal: WeekHours;
+  /** Types of work you added, by id, alongside the built-in ones */
+  taskTypes?: Record<string, TaskType>;
   /** Minutes kept free before and after events */
   buffer: number;
   /** How many days ahead the planner looks */

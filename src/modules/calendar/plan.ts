@@ -3,7 +3,7 @@ import { format, isPast, isThisWeek, isToday, isTomorrow, isYesterday } from "da
 import { dayKey, parseDay } from "@/lib/dates";
 import { schedule, type Plan, type TaskStatus } from "./scheduler";
 import {
-  TASK_TYPES,
+  taskTypes,
   compareEvents,
   expandEvents,
   formatTime,
@@ -66,7 +66,7 @@ export type Block = {
 export const isMoney = (b: Block) => b.kind === "bill" || b.kind === "renewal";
 
 export function taskColor(t: Task) {
-  return TASK_TYPES[t.type]?.color ?? "slate";
+  return taskTypes()[t.type]?.color ?? "slate";
 }
 
 export function eventBlock(e: CalendarEvent): Block {

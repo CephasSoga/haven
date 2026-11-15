@@ -2,7 +2,7 @@ import { addDays, format } from "date-fns";
 import { AiError, askJson, estimateTokens, inPieces, tokenBudget } from "@/lib/ai";
 import { dayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
-import { expandEvents, fromMinutes, PRIORITIES, TASK_TYPES, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
+import { expandEvents, fromMinutes, PRIORITIES, taskTypes, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
 import { newTaskDraft } from "@/modules/calendar/TaskDialog";
 import { useNotes } from "@/modules/notes/store";
 import { clock, transcriptText, useMeetings, type Analysis, type Meeting } from "./store";
@@ -11,7 +11,8 @@ import { clock, transcriptText, useMeetings, type Analysis, type Meeting } from 
 
 const nullable = (type: string) => ({ anyOf: [{ type }, { type: "null" }] });
 
-const SCHEMA = {
+/** Built when asking, so the task types include the ones you added. */
+const schema = () => ({
   type: "object",
   additionalProperties: false,
   required: ["title", "summary", "decisions", "action_items", "events", "open_questions"],
@@ -32,7 +33,7 @@ const SCHEMA = {
           due: { ...nullable("string"), description: "YYYY-MM-DD if a deadline was stated or clearly implied, else null" },
           duration_minutes: { type: "integer", description: "Realistic focused time to do it" },
           priority: { type: "string", enum: Object.keys(PRIORITIES) },
-          type: { type: "string", enum: Object.keys(TASK_TYPES) },
+          type: { type: "string", enum: Object.keys(taskTypes()) },
         },
       },
     },
@@ -55,7 +56,7 @@ const SCHEMA = {
     },
     open_questions: { type: "array", items: { type: "string" }, description: "Unresolved questions or things to follow up on" },
   },
-};
+});
 
 const SYSTEM = `You turn meeting transcripts into clear notes and next steps for one person: the one who recorded the meeting.
 
@@ -104,7 +105,7 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
     action_items: { title: string; owner: string | null; mine: boolean; due: string | null; duration_minutes: number; priority: Priority; type: string }[];
     events: { title: string; date: string; start: string | null; end: string | null; location: string | null; notes: string | null }[];
     open_questions: string[];
-  }>({ name: "meeting_notes", system: SYSTEM, user, schema: SCHEMA, effort: "high", maxTokens: answerRoom });
+  }>({ name: "meeting_notes", system: SYSTEM, user, schema: schema(), effort: "high", maxTokens: answerRoom, timeoutMs: 300_000 });
 
   const isDate = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
   const isTime = (t: string | null) => !!t && /^\d{2}:\d{2}$/.test(t);
@@ -119,7 +120,7 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
       due: isDate(a.due) ? a.due : null,
       duration: Math.min(480, Math.max(10, Math.round(a.duration_minutes / 5) * 5 || 30)),
       priority: a.priority in PRIORITIES ? a.priority : "medium",
-      type: a.type in TASK_TYPES ? a.type : "admin",
+      type: a.type in taskTypes() ? a.type : "admin",
     })),
     events: raw.events
       .filter((e) => isDate(e.date))
@@ -284,6 +285,44 @@ export function addEvent(meeting: Meeting, index: number) {
   });
   const id = useCalendar.getState().events.find((x) => !before.has(x.id))?.id;
   useMeetings.getState().patchEvent(meeting.id, index, { addedEventId: id ?? "added" });
+}
+
+/** The meeting's notes as plain text, for pasting into an email or a chat. */
+export function summaryText(meeting: Meeting) {
+  const a = meeting.analysis!;
+  const section = (title: string, lines: string[]) => (lines.length ? ["", title, ...lines] : []);
+  return [
+    a.title,
+    `${format(meeting.startedAt, "EEEE d MMMM yyyy, HH:mm")} · ${clock(meeting.recorded || (meeting.segments.at(-1)?.at ?? 0))}`,
+    "",
+    a.summary.trim(),
+    ...section("Decisions", a.decisions.map((d) => `- ${d}`)),
+    ...section(
+      "Action items",
+      a.actionItems.map((x) => `- ${x.title}${x.owner ? ` — ${x.owner}` : x.mine ? " — me" : ""}${x.due ? ` (by ${x.due})` : ""}`),
+    ),
+    ...section(
+      "Scheduled",
+      a.events.map((e) => `- ${e.title}: ${e.date}${e.start ? ` ${e.start}${e.end ? `–${e.end}` : ""}` : ""}${e.location ? `, ${e.location}` : ""}`),
+    ),
+    ...section("Open questions", a.questions.map((q) => `- ${q}`)),
+  ].join("\n");
+}
+
+/** Copies text, with an older fallback for web views without the clipboard API. */
+export async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
 }
 
 /** Writes the meeting up as a note, tagged #meeting. */

@@ -10,6 +10,7 @@ import {
   Check,
   ChevronLeft,
   ClipboardPaste,
+  Copy,
   FileText,
   Flag,
   Headphones,
@@ -28,7 +29,7 @@ import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Segmented, Sel
 import { explain, useAiReady, useAssistant } from "@/lib/ai";
 import { cn } from "@/lib/utils";
 import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
-import { addEvent, addTask, analyze, todayLabel, writeNotesPage } from "./agent";
+import { addEvent, addTask, analyze, copyText, summaryText, todayLabel, writeNotesPage } from "./agent";
 import { LANGUAGES, speechSupported } from "./speech";
 import { backlog as transcribing, elapsedFor, startRecording, stopRecording, useRecording } from "./session";
 import { localMicSupported, meetingCaptureSupported, queued } from "./capture";
@@ -486,6 +487,7 @@ function Results({ meeting }: { meeting: Meeting }) {
     if (!meeting.notesPageId) writeNotesPage(useMeetings.getState().meetings.find((m) => m.id === meeting.id)!);
   };
   const nothingLeft = !mineLeft.length && !eventsLeft.length && !!meeting.notesPageId;
+  const [copied, setCopied] = useState(false);
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-col gap-4">
@@ -513,6 +515,16 @@ function Results({ meeting }: { meeting: Meeting }) {
                 <FileText className="size-4" /> Save as a note
               </Button>
             )}
+            <Button
+              onClick={async () => {
+                await copyText(summaryText(meeting));
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              title="Copy the summary, decisions, action items and questions"
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />} {copied ? "Copied" : "Copy"}
+            </Button>
           </div>
         </div>
       </Card>

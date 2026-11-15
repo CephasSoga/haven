@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import { formatMoney } from "@/lib/money";
 import { parseDay, todayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
-import { PRIORITIES, repeatSummary, TASK_TYPES, timeRange, useCalendar, type CalendarEvent, type EventDraft, type Priority, type Repeat, type Task } from "@/modules/calendar/store";
+import { PRIORITIES, repeatSummary, taskTypes, timeRange, useCalendar, type CalendarEvent, type EventDraft, type Priority, type Repeat, type Task } from "@/modules/calendar/store";
 import { TRANSFER, useFinance, type Transaction } from "@/modules/finances/store";
 import { useNotes, type Note } from "@/modules/notes/store";
 
@@ -83,7 +83,8 @@ const closed = (properties: Record<string, unknown>, description?: string) => ({
 const DAY = { type: "string", description: "yyyy-MM-dd" };
 const TIME = { type: "string", description: "HH:mm, 24-hour" };
 
-export const ANSWER_SCHEMA = closed({
+/** The answer format; built when asking, so the task types include the ones you added. */
+export const answerSchema = () => closed({
   reply: { type: "string", description: "What you say back, briefly, in the user's language. If you need more details before acting, ask here and propose nothing." },
   actions: {
     type: "array",
@@ -113,7 +114,7 @@ export const ANSWER_SCHEMA = closed({
             title: str,
             duration_minutes: { type: "integer" },
             priority: { type: "string", enum: Object.keys(PRIORITIES) },
-            type: { type: "string", enum: Object.keys(TASK_TYPES) },
+            type: { type: "string", enum: Object.keys(taskTypes()) },
             schedule: { type: "string", enum: ["work", "personal"] },
             deadline: nul(DAY),
             start_date: nul(DAY),
@@ -309,7 +310,7 @@ const toTask = (t: TaskFields) => ({
   title: t.title.trim(),
   duration: Math.max(5, Math.round(t.duration_minutes)),
   priority: t.priority in PRIORITIES ? t.priority : ("medium" as Priority),
-  type: t.type in TASK_TYPES ? t.type : "admin",
+  type: t.type in taskTypes() ? t.type : "admin",
   schedule: t.schedule,
   deadline: t.deadline ?? undefined,
   startDate: t.start_date ?? undefined,

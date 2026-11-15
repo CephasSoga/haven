@@ -6,7 +6,7 @@ import { IconButton, Modal, Segmented } from "@/components/ui";
 import { dayKey } from "@/lib/dates";
 import { cn, swatch } from "@/lib/utils";
 import { buildBlocks, usePlan, type Block } from "./plan";
-import { TASK_TYPES, formatDuration, rangesOf, toMinutes, useCalendar } from "./store";
+import { formatDuration, rangesOf, toMinutes, useCalendar, useTaskTypes } from "./store";
 
 type Period = "week" | "month";
 
@@ -19,6 +19,7 @@ const hours = (min: number) => formatDuration(Math.round(min));
 /** Where your time goes in a week or a month: events, planned and finished tasks, and how full your working hours are. */
 export function TimeInsights({ open, onClose, cursor, weekStartsOn }: { open: boolean; onClose: () => void; cursor: Date; weekStartsOn: 0 | 1 }) {
   const { events, tasks, prefs } = useCalendar();
+  const types = useTaskTypes();
   const plan = usePlan();
   const [period, setPeriod] = useState<Period>("week");
   const [anchor, setAnchor] = useState(cursor);
@@ -142,8 +143,8 @@ export function TimeInsights({ open, onClose, cursor, weekStartsOn }: { open: bo
                 empty="No tasks in this period."
                 rows={stats.types.map((t) => ({
                   key: t.type,
-                  label: TASK_TYPES[t.type]?.label ?? t.type,
-                  color: swatch(TASK_TYPES[t.type]?.color ?? "slate").fg,
+                  label: types[t.type]?.label ?? t.type,
+                  color: swatch(types[t.type]?.color ?? "slate").fg,
                   min: t.min,
                 }))}
                 total={stats.tasksMin}

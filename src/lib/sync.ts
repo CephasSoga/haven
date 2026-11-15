@@ -14,6 +14,7 @@ import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
 import { readVaultFile, useVault, type VaultFile } from "@/modules/vault/store";
+import { readDecisionsFile, useDecisions, type DecisionsFile } from "@/modules/decisions/store";
 
 /**
  * Keeps this device and your account in step.
@@ -40,7 +41,9 @@ const STORES: Record<string, PersistedStore> = {
   "haven:releases": useReleases,
 };
 const VAULT = "haven:vault";
-const KEYS = [...Object.keys(STORES), VAULT];
+/** Decisions travel like the vault: encrypted, and re-opened (or re-locked) when another device changes them. */
+const DECISIONS = "haven:decisions";
+const KEYS = [...Object.keys(STORES), VAULT, DECISIONS];
 
 const META_KEY = "haven:sync";
 const DEVICE_KEY = "haven:device";
@@ -137,6 +140,7 @@ async function apply(row: Row) {
     writeMeta(meta);
     // The vault re-locks when another device changed it; unlock to see the new contents.
     if (row.key === VAULT) useVault.getState().restore(row.data as VaultFile);
+    else if (row.key === DECISIONS) await useDecisions.getState().restore(row.data as DecisionsFile);
     else await STORES[row.key].persist.rehydrate();
   } finally {
     applying = false;
@@ -164,7 +168,9 @@ const hasLocalData = () =>
     useLibrary.getState().books.length +
     useMeetings.getState().meetings.length +
     useSubscriptions.getState().subs.length >
-    0 || !!readVaultFile();
+    0 ||
+  !!readVaultFile() ||
+  !!readDecisionsFile();
 
 /** Called once signed in: reconciles this device with the account, then keeps them in step. */
 export async function startSync(acc: Account) {
@@ -215,6 +221,7 @@ export async function startSync(acc: Account) {
   // Watch local changes. Stores tell their listeners before they save, so look once the save is done.
   for (const [k, store] of Object.entries(STORES)) unsubscribers.push(store.subscribe(() => queueMicrotask(() => watch(k))));
   unsubscribers.push(useVault.subscribe(() => queueMicrotask(() => watch(VAULT))));
+  unsubscribers.push(useDecisions.subscribe(() => queueMicrotask(() => watch(DECISIONS))));
   // Haven open in several tabs: a change saved in one shows up in the others.
   const otherTab = (e: StorageEvent) => {
     if (!e.key || !(e.key in STORES) || e.newValue === null) return;

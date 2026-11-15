@@ -14,6 +14,7 @@ import { useFeed } from "@/modules/feed/store";
 import { useMeetings } from "@/modules/meetings/store";
 import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
+import { readDecisionsFile, useDecisions } from "@/modules/decisions/store";
 import { AI_PROVIDERS, explain, testConnection, useAi, type AiProvider } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
@@ -77,6 +78,8 @@ export function SettingsPage() {
       notes: { notes: notes.notes },
       // Already encrypted — the backup never contains vault contents in the clear.
       vault: readVaultFile(),
+      // Encrypted too, with the Decisions password.
+      decisions: readDecisionsFile(),
       // Shelf and reading progress; the book files themselves stay in this browser.
       library: { books: library.books },
       feed: { interests: feed.interests, time: feed.time, perInterest: feed.perInterest, auto: feed.auto, editions: feed.editions },
@@ -110,6 +113,7 @@ export function SettingsPage() {
       // Backups made while Notes used block pages hold `pages`; convert them back to notes.
       notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []));
       if (data.vault?.app === "haven-vault") vault.restore(data.vault);
+      if (data.decisions?.app === "haven-decisions") void useDecisions.getState().restore(data.decisions);
       if (data.library?.books) library.replaceAll(data.library.books);
       if (data.feed) useFeed.setState({ ...data.feed, running: false, error: null });
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
@@ -218,6 +222,7 @@ export function SettingsPage() {
               calendar.replaceAll({ events: [], tasks: [] });
               notes.replaceAll([]);
               vault.restore(null);
+              void useDecisions.getState().restore(null);
               library.replaceAll([]);
               meetings.replaceAll([]);
               useSubscriptions.setState({ subs: [], dismissed: [] });

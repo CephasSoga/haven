@@ -114,6 +114,13 @@ export const assistantName = () => AI_PROVIDERS[useAi.getState().provider].assis
 
 export class AiError extends Error {}
 
+/** The request was stopped on purpose (it isn't a failure to report). */
+export class AiStopped extends AiError {
+  constructor() {
+    super("Stopped.");
+  }
+}
+
 /** A service's answer that wasn't a success, keeping its status and own explanation. */
 class ServiceError extends AiError {
   constructor(
@@ -174,7 +181,7 @@ export function tokenBudget() {
 }
 
 /** Waits, if need be, until the last minute's requests leave room for `tokens` more. */
-async function pace(tokens: number) {
+async function pace(tokens: number, signal?: AbortSignal) {
   for (;;) {
     const now = Date.now();
     while (spent.length && now - spent[0].at > 60_000) spent.shift();
@@ -182,7 +189,11 @@ async function pace(tokens: number) {
     if (!spent.length || used + tokens <= groqTpm) break;
     const wait = 60_000 - (now - spent[0].at) + 500;
     showNotice({ id: "groq-wait", tone: "info", sticky: true, title: "Waiting for Groq", body: `Your Groq plan allows ${groqTpm.toLocaleString()} tokens a minute, so long jobs go in parts. Carrying on in about ${Math.ceil(wait / 1000)} s.` });
-    await new Promise((r) => setTimeout(r, wait));
+    // Waiting can be stopped too.
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, wait);
+      signal?.addEventListener("abort", () => (clearTimeout(t), dismissNotice("groq-wait"), reject(new DOMException("Stopped", "AbortError"))), { once: true });
+    });
   }
   dismissNotice("groq-wait");
   spent.push({ at: Date.now(), tokens });
@@ -219,14 +230,42 @@ export type JsonRequest = {
   /** How hard to think: low for sorting and summaries, higher for reading a whole meeting */
   effort?: "low" | "medium" | "high";
   maxTokens?: number;
+  /** Lets the caller stop the request (a Stop button) */
+  signal?: AbortSignal;
+  /** Give up after this long; default 3 minutes */
+  timeoutMs?: number;
 };
 
 /** Asks the chosen service for an answer in the given JSON shape, and returns it parsed. */
-export async function askJson<T>(req: JsonRequest): Promise<T> {
+export async function askJson<T>(original: JsonRequest): Promise<T> {
   const { provider, keys, models } = useAi.getState();
   const key = keys[provider].trim();
   if (!key) throw new AiError(`Add your ${AI_PROVIDERS[provider].label} API key in Settings to use AI features.`);
-  const text = provider === "anthropic" ? await viaAnthropic(req, key, models.anthropic) : provider === "openai" ? await viaOpenAi(req, key, models.openai) : await viaGroq(req, key, models.groq);
+  // Never wait forever: a stalled connection used to leave things "thinking" indefinitely.
+  const limit = original.timeoutMs ?? 180_000;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => ((timedOut = true), controller.abort()), limit);
+  const stop = () => controller.abort();
+  if (original.signal?.aborted) controller.abort();
+  original.signal?.addEventListener("abort", stop);
+  const req = { ...original, signal: controller.signal };
+  let text: string;
+  try {
+    text = provider === "anthropic" ? await viaAnthropic(req, key, models.anthropic) : provider === "openai" ? await viaOpenAi(req, key, models.openai) : await viaGroq(req, key, models.groq);
+  } catch (e) {
+    if (controller.signal.aborted) {
+      if (timedOut)
+        throw new AiError(
+          `${AI_PROVIDERS[provider].assistant} took more than ${Math.round(limit / 1000)} seconds to answer, so Haven stopped waiting. Try again, or pick a faster model in Settings.`,
+        );
+      throw new AiStopped();
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    original.signal?.removeEventListener("abort", stop);
+  }
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -248,7 +287,7 @@ async function viaAnthropic(req: JsonRequest, apiKey: string, model: string) {
       output_config: { effort: req.effort ?? "medium", format: { type: "json_schema", schema: req.schema } },
       system: req.system,
       messages: [{ role: "user", content: req.user }],
-    })
+    }, { signal: req.signal })
     .finalMessage();
   if (res.stop_reason === "refusal") throw new AiError("Claude declined to do this.");
   if (res.stop_reason === "max_tokens") throw new AiError("That was too long to handle in one go.");
@@ -256,12 +295,13 @@ async function viaAnthropic(req: JsonRequest, apiKey: string, model: string) {
 }
 
 /** The apps send requests natively, so the services' browser rules (CORS) don't get in the way. */
-async function post(name: string, url: string, key: string, body: unknown) {
+async function post(name: string, url: string, key: string, body: unknown, signal?: AbortSignal) {
   const doFetch = inApp ? (await import("@tauri-apps/plugin-http")).fetch : fetch;
   let res: Response;
   try {
-    res = await doFetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  } catch {
+    res = await doFetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  } catch (e) {
+    if (signal?.aborted) throw e;
     throw new AiError(inApp ? `Couldn't reach ${name}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
   }
   if (res.ok) return res.json();
@@ -285,7 +325,7 @@ async function viaOpenAi(req: JsonRequest, key: string, model: string) {
     text: { format: { type: "json_schema", name: req.name, schema: req.schema, strict: true } },
     reasoning: { effort: req.effort ?? "medium" },
     max_output_tokens: req.maxTokens ?? 16000,
-  })) as Out;
+  }, req.signal)) as Out;
   const parts = (res.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []);
   if (parts.some((p) => p.type === "refusal")) throw new AiError("GPT declined to do this.");
   if (res.status === "incomplete" && res.incomplete_details?.reason === "max_output_tokens") throw new AiError("That was too long to handle in one go.");
@@ -309,14 +349,14 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
       ],
       response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
       max_completion_tokens: maxTokens,
-    }) as Promise<Out>;
+    }, req.signal) as Promise<Out>;
   const wanted = Math.min(req.maxTokens ?? 16000, 65536);
   // Groq counts the longest answer allowed against the allowance, so allow only what fits.
   let reading = estimateTokens(req.system + req.user + JSON.stringify(req.schema)) + 50;
   let max = Math.max(1000, Math.min(wanted, groqTpm - reading - 256));
   let res: Out;
   for (let attempt = 0; ; attempt++) {
-    await pace(reading + max);
+    await pace(reading + max, req.signal);
     try {
       res = await ask(max);
       break;

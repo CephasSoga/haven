@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, CalendarClock, Check, Flag, Lock, RotateCcw, Trash2, X } from "lucide-react";
-import { Button, Field, Input, Modal, Segmented, Select, Switch, Textarea } from "@/components/ui";
+import { AlertTriangle, CalendarClock, Check, Flag, Lock, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { ask } from "@/components/confirm";
+import { Button, ColorPicker, Field, Input, Modal, Segmented, Select, Switch, Textarea } from "@/components/ui";
 import { cn, swatch } from "@/lib/utils";
-import { formatDuration, PRIORITIES, REPEAT_LABELS, TASK_TYPES, timeRange, useCalendar, type Priority, type Repeat, type TaskDraft } from "./store";
+import { addTaskType, formatDuration, PRIORITIES, REPEAT_LABELS, removeTaskType, TASK_TYPES, timeRange, useCalendar, useTaskTypes, type Priority, type Repeat, type TaskDraft } from "./store";
 import { dayLabel, slotsUntilNow, usePlan } from "./plan";
 
 const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
@@ -47,10 +48,106 @@ function Chip({ active, onClick, children, color }: { active: boolean; onClick: 
   );
 }
 
+/** The types of work, plus making your own (and removing ones you made). */
+function TypePicker({ value, types, onChange }: { value: string; types: Record<string, { label: string; color: string }>; onChange: (id: string) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [color, setColor] = useState("teal");
+  const add = () => {
+    if (!name.trim()) return;
+    onChange(addTaskType(name, color));
+    setName("");
+    setAdding(false);
+  };
+  const remove = async (id: string) => {
+    const used = useCalendar.getState().tasks.filter((t) => t.type === id).length;
+    const ok =
+      !used ||
+      (await ask({
+        title: `Remove “${types[id].label}”?`,
+        body: `${used} ${used === 1 ? "task uses" : "tasks use"} this type; ${used === 1 ? "it becomes" : "they become"} Admin.`,
+        confirmLabel: "Remove",
+        danger: true,
+      }));
+    if (!ok) return;
+    removeTaskType(id);
+    if (value === id) onChange("admin");
+  };
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap gap-1.5">
+        {Object.entries(types).map(([id, t]) => (
+          <span key={id} className="group/type relative">
+            <Chip active={value === id} onClick={() => onChange(id)} color={swatch(t.color).fg}>
+              <span className="size-2 rounded-full" style={{ background: value === id ? "#fff" : swatch(t.color).fg }} />
+              {t.label}
+            </Chip>
+            {!(id in TASK_TYPES) && (
+              <button
+                type="button"
+                onClick={() => void remove(id)}
+                aria-label={`Remove the type ${t.label}`}
+                title="Remove this type"
+                // Shown on hover, and on the selected type for touch screens.
+                className={cn(
+                  "absolute -right-1.5 -top-1.5 size-5 items-center justify-center rounded-full border border-line bg-raised text-faint shadow-soft hover:text-neg group-hover/type:flex",
+                  value === id ? "flex" : "hidden",
+                )}
+              >
+                <X className="size-3" />
+              </button>
+            )}
+          </span>
+        ))}
+        {!adding && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex h-8 items-center gap-1 rounded-full border border-dashed border-line-strong px-3 text-[13px] font-medium text-muted hover:text-ink"
+          >
+            <Plus className="size-3.5" /> New type
+          </button>
+        )}
+      </div>
+      {adding && (
+        <div className="flex flex-col gap-3 rounded-2xl border border-line bg-sunken/50 p-3">
+          <div className="flex gap-2">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  add();
+                }
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setAdding(false);
+                }
+              }}
+              placeholder="e.g. Coaching, Writing, Family"
+              autoFocus
+              className="h-9"
+            />
+            <Button size="sm" variant="primary" onClick={add} disabled={!name.trim()}>
+              Add
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          </div>
+          <ColorPicker value={color} onChange={setColor} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClose: () => void }) {
   const { saveTask, removeTask, completeTask, reopenTask, lockTask } = useCalendar();
   const plan = usePlan();
   const [form, setForm] = useState<TaskDraft | null>(draft);
+  const types = useTaskTypes();
   const [prevDraft, setPrevDraft] = useState(draft);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -70,7 +167,7 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
   const patch = (p: Partial<TaskDraft>) => setForm({ ...f, ...p });
   const invalid = !f.title.trim() || f.duration < 5;
   const info = f.id ? plan.byTask.get(f.id) : undefined;
-  const typeColor = swatch(TASK_TYPES[f.type]?.color ?? "slate").fg;
+  const typeColor = swatch(types[f.type]?.color ?? "slate").fg;
 
   const submit = () => {
     if (invalid) return;
@@ -226,16 +323,7 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
         </Field>
 
         <Field label="Type of work">
-          {() => (
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(TASK_TYPES).map(([id, t]) => (
-                <Chip key={id} active={f.type === id} onClick={() => patch({ type: id })} color={swatch(t.color).fg}>
-                  <span className="size-2 rounded-full" style={{ background: f.type === id ? "#fff" : swatch(t.color).fg }} />
-                  {t.label}
-                </Chip>
-              ))}
-            </div>
-          )}
+          {() => <TypePicker value={f.type} types={types} onChange={(type) => patch({ type })} />}
         </Field>
 
         <Field label="When can it happen?">
