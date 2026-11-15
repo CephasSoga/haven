@@ -18,6 +18,7 @@ fn set_run_in_background(state: tauri::State<Background>, on: bool) {
 /// Brings the main window back, from the tray or when Haven is launched a second time.
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
