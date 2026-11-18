@@ -169,8 +169,15 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
     setBusy(true);
     setError(null);
     try {
-      // Let the last few utterances finish transcribing first.
-      for (let i = 0; queued > 0 && i < 240; i++) await new Promise((r) => setTimeout(r, 250));
+      // Let the last utterances finish transcribing first — on this device a long meeting can leave
+      // many; keep waiting as long as they're moving, and give up after a minute without progress.
+      let left = queued;
+      let movedAt = Date.now();
+      while (queued > 0 && Date.now() - movedAt < 60_000) {
+        setStep(`finishing the transcript — ${queued} line${queued === 1 ? "" : "s"} left`);
+        await new Promise((r) => setTimeout(r, 500));
+        if (queued < left) (left = queued), (movedAt = Date.now());
+      }
       setStep("");
       const analysis = await analyze(useMeetings.getState().meetings.find((m) => m.id === meeting.id)!, setStep);
       update(meeting.id, { analysis, title: meeting.title || analysis.title });

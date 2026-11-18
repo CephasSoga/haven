@@ -114,6 +114,16 @@ export const assistantName = () => AI_PROVIDERS[useAi.getState().provider].assis
 
 export class AiError extends Error {}
 
+/** The answer didn't come within the time allowed. */
+export class AiTimeout extends AiError {}
+
+/** The answer needed more room than the request allowed. */
+export class AiTooLong extends AiError {
+  constructor() {
+    super("That was too long to handle in one go.");
+  }
+}
+
 /** The request was stopped on purpose (it isn't a failure to report). */
 export class AiStopped extends AiError {
   constructor() {
@@ -133,6 +143,19 @@ class ServiceError extends AiError {
 }
 
 /** Turns errors from any of the services into sentences a person can act on. */
+/**
+ * Whether trying the same request again could work: not when it was stopped on purpose, the key or
+ * model is wrong, there's no key, or the model declined. Timeouts, dropped connections, busy servers
+ * and unreadable answers are worth another go.
+ */
+export function worthRetrying(error: unknown) {
+  if (error instanceof AiStopped || error instanceof AiTooLong) return false;
+  if (error instanceof ServiceError) return error.status === 429 || error.status >= 500;
+  if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError || error instanceof Anthropic.NotFoundError || error instanceof Anthropic.BadRequestError) return false;
+  if (error instanceof AiError && /API key|declined/i.test(error.message)) return false;
+  return true;
+}
+
 export function explain(error: unknown): string {
   if (error instanceof AiError) return error.message;
   if (error instanceof Anthropic.AuthenticationError) return "Anthropic didn't accept the API key. Check it in Settings.";
@@ -256,7 +279,7 @@ export async function askJson<T>(original: JsonRequest): Promise<T> {
   } catch (e) {
     if (controller.signal.aborted) {
       if (timedOut)
-        throw new AiError(
+        throw new AiTimeout(
           `${AI_PROVIDERS[provider].assistant} took more than ${Math.round(limit / 1000)} seconds to answer, so Haven stopped waiting. Try again, or pick a faster model in Settings.`,
         );
       throw new AiStopped();
@@ -290,7 +313,7 @@ async function viaAnthropic(req: JsonRequest, apiKey: string, model: string) {
     }, { signal: req.signal })
     .finalMessage();
   if (res.stop_reason === "refusal") throw new AiError("Claude declined to do this.");
-  if (res.stop_reason === "max_tokens") throw new AiError("That was too long to handle in one go.");
+  if (res.stop_reason === "max_tokens") throw new AiTooLong();
   return res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
 }
 
@@ -328,7 +351,7 @@ async function viaOpenAi(req: JsonRequest, key: string, model: string) {
   }, req.signal)) as Out;
   const parts = (res.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []);
   if (parts.some((p) => p.type === "refusal")) throw new AiError("GPT declined to do this.");
-  if (res.status === "incomplete" && res.incomplete_details?.reason === "max_output_tokens") throw new AiError("That was too long to handle in one go.");
+  if (res.status === "incomplete" && res.incomplete_details?.reason === "max_output_tokens") throw new AiTooLong();
   return parts.map((p) => (p.type === "output_text" ? (p.text ?? "") : "")).join("");
 }
 
@@ -378,7 +401,7 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
   }
   const choice = res.choices?.[0];
   if (choice?.message?.refusal) throw new AiError("The model declined to do this.");
-  if (choice?.finish_reason === "length") throw new AiError("That was too long to handle in one go.");
+  if (choice?.finish_reason === "length") throw new AiTooLong();
   return choice?.message?.content ?? "";
 }
 

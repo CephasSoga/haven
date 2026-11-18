@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aiReady } from "@/lib/ai";
+import { showNotice } from "@/lib/notices";
 import { correctTranscript } from "./agent";
 import { PHANTOMS, prepareModel, transcribeLocal, unloadModel, whisperLanguage } from "./capture";
 import { deleteClips, fromPcm, meetingClips, type Clip } from "./clips";
@@ -97,7 +98,20 @@ export async function improveTranscript(meetingId: string) {
     if (aiReady()) {
       set({ step: "correct", detail: "" });
       const m = useMeetings.getState().meetings.find((x) => x.id === meetingId);
-      if (m?.segments.length) useMeetings.getState().update(meetingId, { segments: await correctTranscript(m, (detail) => set({ detail })) });
+      if (m?.segments.length) {
+        const { segments, skipped, parts } = await correctTranscript(m, (detail) => set({ detail }));
+        useMeetings.getState().update(meetingId, { segments });
+        if (skipped.length)
+          showNotice({
+            tone: "warning",
+            sticky: true,
+            title: "Part of the transcript wasn't corrected",
+            body:
+              skipped.length === 1
+                ? `Part ${skipped[0]} of ${parts} couldn't be corrected and was left as it was. Press “Improve transcript” again to retry it.`
+                : `Parts ${skipped.join(", ")} of ${parts} couldn't be corrected and were left as they were. Press “Improve transcript” again to retry them.`,
+          });
+      }
     }
     set({ meetingId: null, step: null });
   } catch (e) {

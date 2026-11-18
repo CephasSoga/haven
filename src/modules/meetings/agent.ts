@@ -1,11 +1,53 @@
 import { addDays, format } from "date-fns";
-import { AiError, askJson, estimateTokens, inPieces, tokenBudget } from "@/lib/ai";
+import { AiError, AiTimeout, AiTooLong, askJson, estimateTokens, inPieces, tokenBudget, worthRetrying } from "@/lib/ai";
 import { dayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
 import { expandEvents, fromMinutes, PRIORITIES, taskTypes, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
 import { newTaskDraft } from "@/modules/calendar/TaskDialog";
 import { useNotes } from "@/modules/notes/store";
 import { clock, transcriptText, useMeetings, type Analysis, type Meeting } from "./store";
+
+/* ---------- Long meetings ---------- */
+
+/**
+ * Anthropic and OpenAI could take a whole long meeting in one request, but one request that has to
+ * read (or rewrite) an hour of talk is slow enough to time out and can run out of room for its
+ * answer. So long work goes in parts of bounded size, a few at a time, each retried once.
+ */
+const roomy = () => tokenBudget() > 50_000;
+/** Groq paces requests to its per-minute allowance anyway, so its parts go one after another. */
+const atOnce = () => (roomy() ? 3 : 1);
+/** About 10 minutes of speech: a part's corrections come back in well under a minute. */
+const FIX_PART_TOKENS = 2_500;
+/** About 40 minutes of speech per condensed part. */
+const CONDENSE_PART_TOKENS = 10_000;
+/** Past about two hours, the meeting is read part by part even when it would fit in one request. */
+const ONE_PASS_TOKENS = 30_000;
+
+/** Runs `fn` over the items, at most `limit` at a time, keeping the results in order. */
+async function inParallel<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/** Tries once more when a part fails for a reason that may pass (a timeout, a dropped connection, a busy server). */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!worthRetrying(e)) throw e;
+    await new Promise((r) => setTimeout(r, 2000));
+    return fn();
+  }
+}
 
 /* ---------- Reading the meeting ---------- */
 
@@ -88,24 +130,47 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
     .filter(Boolean)
     .join("\n\n");
   const transcript = transcriptText(meeting.segments);
-  // Room for the notes themselves: about 5,000 tokens on a small plan, more on bigger ones.
-  const answerRoom = Math.min(16000, Math.max(2500, Math.round(tokenBudget() * 0.35)));
-  const fits = estimateTokens(SYSTEM + intro + transcript) + answerRoom + 600 <= tokenBudget();
-  const body = !transcript
-    ? "Transcript: (no transcript — work from the notes)"
-    : fits
-      ? `Transcript:\n${transcript}`
-      : `The transcript was too long to read at once, so it was condensed part by part. Condensed notes, in order:\n\n${await condense(meeting, onStep)}`;
-  const user = `${intro}\n\n${body}`;
+  const size = estimateTokens(transcript);
+  // Room for the answer, thinking included: about 5,000 tokens on a small Groq plan, 32,000 elsewhere.
+  const answerRoom = roomy() ? 32_000 : Math.min(16000, Math.max(2500, Math.round(tokenBudget() * 0.35)));
+  const fits = size <= ONE_PASS_TOKENS && estimateTokens(SYSTEM + intro + transcript) + answerRoom + 600 <= tokenBudget();
+  const condensed = async () =>
+    `The transcript was too long to read at once, so it was condensed part by part. Condensed notes, in order:\n\n${await condense(meeting, onStep)}`;
 
-  const raw = await askJson<{
+  type Raw = {
     title: string;
     summary: string;
     decisions: string[];
     action_items: { title: string; owner: string | null; mine: boolean; due: string | null; duration_minutes: number; priority: Priority; type: string }[];
     events: { title: string; date: string; start: string | null; end: string | null; location: string | null; notes: string | null }[];
     open_questions: string[];
-  }>({ name: "meeting_notes", system: SYSTEM, user, schema: schema(), effort: "high", maxTokens: answerRoom, timeoutMs: 300_000 });
+  };
+  const ask = (body: string, { long = false } = {}) =>
+    askJson<Raw>({
+      name: "meeting_notes",
+      system: SYSTEM,
+      user: `${intro}\n\n${body}`,
+      schema: schema(),
+      // A long meeting read whole thinks a little less, so the answer comes in time.
+      effort: long ? "medium" : "high",
+      maxTokens: answerRoom,
+      // More to read takes longer: 4 minutes, plus about 2 more per hour of meeting, at most 10.
+      timeoutMs: Math.min(600_000, 240_000 + size * 10),
+    });
+
+  let raw: Raw;
+  if (!transcript) raw = await ask("Transcript: (no transcript — work from the notes)");
+  else if (!fits) raw = await ask(await condensed());
+  else {
+    try {
+      raw = await withRetry(() => ask(`Transcript:\n${transcript}`, { long: size > 12_000 }));
+    } catch (e) {
+      // Too slow, or too long for one answer: read it part by part instead.
+      if (!(e instanceof AiTimeout || e instanceof AiTooLong) || size < 3_000) throw e;
+      onStep?.("reading it in parts instead");
+      raw = await ask(await condensed());
+    }
+  }
 
   const isDate = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
   const isTime = (t: string | null) => !!t && /^\d{2}:\d{2}$/.test(t);
@@ -169,36 +234,58 @@ const FIX_SYSTEM = `You correct transcripts made by speech recognition, which mi
 - When you can't tell what was said, leave the line as it is.
 - Return only the lines you changed.`;
 
-/** Asks Claude to correct speech-recognition errors line by line; returns the corrected lines (empty ones removed). */
-export async function correctTranscript(meeting: Meeting, onStep?: (step: string) => void): Promise<Meeting["segments"]> {
+/**
+ * Asks the AI to correct speech-recognition errors line by line, in parts of about ten minutes.
+ * Returns the corrected lines (empty ones removed) and the parts that couldn't be corrected, which
+ * are left as they were — one bad part doesn't undo the rest.
+ */
+export async function correctTranscript(meeting: Meeting, onStep?: (step: string) => void): Promise<{ segments: Meeting["segments"]; skipped: number[]; parts: number }> {
   const segments = meeting.segments;
-  if (!segments.length) return segments;
+  if (!segments.length) return { segments, skipped: [], parts: 0 };
   const language = LANGUAGE_NAMES[meeting.language.slice(0, 2)] ?? meeting.language;
   const intro = [`The meeting was held in ${language}.`, meeting.myNotes.trim() && `The recorder's notes:\n${meeting.myNotes.trim()}`].filter(Boolean).join("\n\n");
   const line = (i: number) => `${i + 1}. ${segments[i].speaker ? `${segments[i].speaker}: ` : ""}${segments[i].text}`;
   // Corrections can be as long as the lines themselves, so each piece leaves the same again for the answer.
-  const room = Math.max(800, Math.floor((tokenBudget() - estimateTokens(FIX_SYSTEM + intro) - 1200) / 2.3));
+  const room = Math.min(FIX_PART_TOKENS, Math.max(800, Math.floor((tokenBudget() - estimateTokens(FIX_SYSTEM + intro) - 1200) / 2.3)));
   const pieces = inPieces(
     segments.map((_, i) => i),
     line,
     room,
   );
-  const fixes: { line: number; text: string }[] = [];
-  for (const [n, piece] of pieces.entries()) {
-    onStep?.(pieces.length > 1 ? `part ${n + 1} of ${pieces.length}` : "");
+  const skipped: number[] = [];
+  let lastError: unknown;
+  let done = 0;
+  const progress = () => onStep?.(pieces.length > 1 ? `${done} of ${pieces.length} parts done` : "");
+  progress();
+  const results = await inParallel(pieces, atOnce(), async (piece, n) => {
     // A few lines before each piece, for context; only the piece's own lines are corrected.
     const before = piece[0] > 0 ? `For context, the lines just before:\n${Array.from({ length: Math.min(3, piece[0]) }, (_, k) => line(piece[0] - Math.min(3, piece[0]) + k)).join("\n")}\n\n` : "";
-    const answer = await askJson<{ fixes: { line: number; text: string }[] }>({
-      name: "transcript_fixes",
-      system: FIX_SYSTEM,
-      user: `${intro}\n\n${before}${pieces.length > 1 ? `Lines ${piece[0] + 1}–${piece.at(-1)! + 1} of ${segments.length}` : "Transcript"}, one numbered line per utterance:\n${piece.map(line).join("\n")}`,
-      schema: FIX_SCHEMA,
-      effort: "medium",
-      // Groq's models stop at about 65,000 tokens of answer; Haven caps the request there.
-      maxTokens: Math.min(64000, Math.max(1500, Math.round(room * 1.3))),
-    });
-    fixes.push(...answer.fixes.filter((f) => f.line - 1 >= piece[0] && f.line - 1 <= piece.at(-1)!));
-  }
+    try {
+      const answer = await withRetry(() =>
+        askJson<{ fixes: { line: number; text: string }[] }>({
+          name: "transcript_fixes",
+          system: FIX_SYSTEM,
+          user: `${intro}\n\n${before}${pieces.length > 1 ? `Lines ${piece[0] + 1}–${piece.at(-1)! + 1} of ${segments.length}` : "Transcript"}, one numbered line per utterance:\n${piece.map(line).join("\n")}`,
+          schema: FIX_SCHEMA,
+          effort: "medium",
+          // The corrections, plus room to think (which counts against the answer with Claude and OpenAI).
+          maxTokens: Math.max(1500, Math.round(room * 1.3)) + (roomy() ? 6000 : 0),
+        }),
+      );
+      return answer.fixes.filter((f) => f.line - 1 >= piece[0] && f.line - 1 <= piece.at(-1)!);
+    } catch (e) {
+      // A wrong key or a stop ends everything; anything else just leaves this part as it was.
+      if (!worthRetrying(e) && !(e instanceof AiTooLong)) throw e;
+      skipped.push(n + 1);
+      lastError = e;
+      return [];
+    } finally {
+      done++;
+      progress();
+    }
+  });
+  if (skipped.length === pieces.length) throw lastError;
+  const fixes = results.flat();
   const out = segments.map((s) => ({ ...s }));
   for (const f of fixes) {
     const s = out[f.line - 1];
@@ -206,7 +293,7 @@ export async function correctTranscript(meeting: Meeting, onStep?: (step: string
     // Claude sometimes repeats the speaker label it was shown; it's kept separately.
     s.text = s.speaker ? f.text.replace(new RegExp(`^${s.speaker}:\\s*`), "") : f.text;
   }
-  return out.filter((s) => s.text.trim());
+  return { segments: out.filter((s) => s.text.trim()), skipped: skipped.sort((a, b) => a - b), parts: pieces.length };
 }
 
 const CONDENSE_SCHEMA = {
@@ -225,21 +312,25 @@ const CONDENSE_SYSTEM = `You condense one part of a long meeting transcript into
 /** A transcript too long to read at once, as notes condensed piece by piece, in order. */
 async function condense(meeting: Meeting, onStep?: (step: string) => void) {
   const lines = transcriptText(meeting.segments).split("\n");
-  const room = Math.max(1000, Math.floor((tokenBudget() - estimateTokens(CONDENSE_SYSTEM) - 1500) * 0.6));
+  const room = Math.min(CONDENSE_PART_TOKENS, Math.max(1000, Math.floor((tokenBudget() - estimateTokens(CONDENSE_SYSTEM) - 1500) * 0.6)));
   const pieces = inPieces(lines, (l) => l, room);
-  const notes: string[] = [];
-  for (const [n, piece] of pieces.entries()) {
-    onStep?.(`reading part ${n + 1} of ${pieces.length}`);
-    const { notes: part } = await askJson<{ notes: string }>({
-      name: "meeting_part",
-      system: CONDENSE_SYSTEM,
-      user: `Part ${n + 1} of ${pieces.length} of the transcript:\n${piece.join("\n")}`,
-      schema: CONDENSE_SCHEMA,
-      effort: "low",
-      maxTokens: Math.max(1000, Math.round(room * 0.5)),
-    });
-    notes.push(`Part ${n + 1}:\n${part.trim()}`);
-  }
+  let done = 0;
+  onStep?.(`reading ${pieces.length} parts`);
+  const notes = await inParallel(pieces, atOnce(), async (piece, n) => {
+    const { notes: part } = await withRetry(() =>
+      askJson<{ notes: string }>({
+        name: "meeting_part",
+        system: CONDENSE_SYSTEM,
+        user: `Part ${n + 1} of ${pieces.length} of the transcript:\n${piece.join("\n")}`,
+        schema: CONDENSE_SCHEMA,
+        effort: "low",
+        maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
+      }),
+    );
+    done++;
+    onStep?.(`read ${done} of ${pieces.length} parts`);
+    return `Part ${n + 1}:\n${part.trim()}`;
+  });
   onStep?.("writing the notes");
   return notes.join("\n\n");
 }
