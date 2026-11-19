@@ -107,7 +107,7 @@ const SYSTEM = `You turn meeting transcripts into clear notes and next steps for
 - Action items: concrete commitments to do something. Mark "mine" when the recorder committed to it ("I'll…", "let me…", or their name). Include others' commitments too, with their owner.
 - Resolve relative dates ("Friday", "next week", "end of the month") against the meeting date. Use null when no deadline was given.
 - Events: only meetings or appointments that were actually scheduled, with a date. Don't create events for vague intentions ("we should meet sometime").
-- Write the summary in the language the meeting was held in, in calm, plain prose.`;
+- Write everything (title, summary, decisions, action items, events and open questions) in the meeting's language, which is given with the meeting. The summary is calm, plain prose.`;
 
 export async function analyze(meeting: Meeting, onStep?: (step: string) => void): Promise<Analysis> {
   if (!meeting.segments.length && !meeting.myNotes.trim()) throw new AiError("There's nothing to read yet — record or import a transcript first.");
@@ -119,8 +119,10 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
     .map((e) => `- ${e.date} ${e.start ? `${e.start}-${e.end ?? ""}` : "all day"}: ${e.title}`)
     .join("\n");
 
+  const language = languageName(meeting.language);
   const intro = [
     `Meeting date: ${format(start, "EEEE d MMMM yyyy, HH:mm")}`,
+    `Language: ${language} (chosen for the transcript). Write all of your answer in ${language}.`,
     `Length: ${clock(meeting.recorded || (meeting.segments.at(-1)?.at ?? 0))}`,
     meeting.title && `Title so far: ${meeting.title}`,
     `The recorder: ${name || "the user (name unknown)"}`,
@@ -143,7 +145,7 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
   /** Reads the condensed notes; if the service still finds them too big (it counts words its own way), shortens them further. */
   const fromNotes = async () => {
     let target = Math.max(800, notesRoom);
-    let parts = await condense(transcriptText(meeting.segments).split("\n"), "transcript", target, onStep);
+    let parts = await condense(transcriptText(meeting.segments).split("\n"), "transcript", target, language, onStep);
     for (let tries = 0; ; tries++) {
       try {
         return await ask(condensedIntro + parts.join("\n\n"));
@@ -152,7 +154,7 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
         // Make it as much shorter as the service says it's over, and a little more.
         const over = e.reading - (e.limit - answerRoom - 300);
         target = Math.max(500, Math.floor((estimateTokens(parts.join("\n\n")) - over * 1.2) * 0.9));
-        parts = await condense(parts, "notes", target, onStep);
+        parts = await condense(parts, "notes", target, language, onStep);
       }
     }
   };
@@ -269,7 +271,7 @@ const FIX_SYSTEM = `You correct transcripts made by speech recognition, which mi
 export async function correctTranscript(meeting: Meeting, onStep?: (step: string) => void): Promise<{ segments: Meeting["segments"]; skipped: number[]; parts: number }> {
   const segments = meeting.segments;
   if (!segments.length) return { segments, skipped: [], parts: 0 };
-  const language = LANGUAGE_NAMES[meeting.language.slice(0, 2)] ?? meeting.language;
+  const language = languageName(meeting.language);
   const intro = [`The meeting was held in ${language}.`, meeting.myNotes.trim() && `The recorder's notes:\n${meeting.myNotes.trim()}`].filter(Boolean).join("\n\n");
   const line = (i: number) => `${i + 1}. ${segments[i].speaker ? `${segments[i].speaker}: ` : ""}${segments[i].text}`;
   // Corrections can be as long as the lines themselves, so each piece leaves the same again for the answer.
@@ -341,7 +343,7 @@ const CONDENSE_SYSTEM = `You condense one part of a long meeting transcript into
  * all told. Each part gets its share of that; if the notes still come out too long (a very long meeting on a small
  * plan), the notes themselves are condensed again.
  */
-async function condense(blocks: string[], kind: "transcript" | "notes", target: number, onStep?: (step: string) => void) {
+async function condense(blocks: string[], kind: "transcript" | "notes", target: number, language: string, onStep?: (step: string) => void) {
   const room = Math.min(CONDENSE_PART_TOKENS, Math.max(1000, Math.floor((tokenBudget() - estimateTokens(CONDENSE_SYSTEM) - 1500) * 0.6)));
   for (let round = kind === "notes" ? 1 : 0; ; round++) {
     const pieces = inPieces(blocks, (l) => l, room);
@@ -358,7 +360,7 @@ async function condense(blocks: string[], kind: "transcript" | "notes", target: 
           askJson<{ notes: string }>({
             name: "meeting_part",
             system: CONDENSE_SYSTEM,
-            user: `${label} of the ${what}. Keep your notes under ${limit} words.\n\n${lines.join("\n")}`,
+            user: `${label} of the ${what}. The meeting is in ${language}: write your notes in ${language}, under ${limit} words.\n\n${lines.join("\n")}`,
             schema: CONDENSE_SCHEMA,
             effort: "low",
             maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
@@ -387,15 +389,14 @@ async function condense(blocks: string[], kind: "transcript" | "notes", target: 
   }
 }
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: "English",
-  fr: "French",
-  es: "Spanish",
-  de: "German",
-  pt: "Portuguese",
-  it: "Italian",
-  nl: "Dutch",
-};
+/** "fr-FR" → "French": the language picked for the meeting's transcript, by name. */
+export function languageName(code: string) {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "language" }).of(code.slice(0, 2)) ?? code;
+  } catch {
+    return code;
+  }
+}
 
 /* ---------- Acting on it ---------- */
 
