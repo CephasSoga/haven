@@ -8,8 +8,11 @@ import type { Plugin } from "vite";
  * RSS) directly. The page asks this endpoint instead — GET /api/feed?url=… — and it fetches
  * the feed from your machine and hands back the XML.
  *
- * Guard rails: only http(s), never local/private network addresses, only feed-like responses
- * (XML/RSS/Atom) up to 30 MB, and a custom header that cross-site pages can't send, so other
+ * It also reads public catalogues that answer in JSON (MIT Learn, the Open Textbook Library) and
+ * TED's lists of talks, for Learning.
+ *
+ * Guard rails: only http(s), never local/private network addresses, only feed-like or JSON responses
+ * up to 30 MB, and a custom header that cross-site pages can't send, so other
  * websites you visit can't use it.
  */
 
@@ -39,7 +42,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, next: () => voi
     const upstream = await fetch(target, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; Haven feed reader)",
-        Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+        Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, application/json;q=0.9, */*;q=0.5",
       },
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
@@ -48,10 +51,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, next: () => voi
     const text = await upstream.text();
     if (!upstream.ok) return fail(502, `The source answered ${upstream.status}.`);
     if (text.length > MAX_BYTES) return fail(413, "That feed is too large.");
-    const looksLikeFeed = /xml|rss|atom/i.test(type) || /^\s*(<\?xml|<rss|<feed)/i.test(text);
-    if (!looksLikeFeed) return fail(415, "That address isn't a news feed.");
+    const looksLikeFeed = /xml|rss|atom/i.test(type) || /^\s*(<\?xml|<rss|<feed|<urlset|<sitemapindex)/i.test(text);
+    const json = /json/i.test(type) && /^\s*[[{]/.test(text);
+    if (!looksLikeFeed && !json) return fail(415, "That address isn't a news feed.");
     res.statusCode = 200;
-    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Content-Type", json ? "application/json; charset=utf-8" : "application/xml; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
     res.end(text);
   } catch (e) {

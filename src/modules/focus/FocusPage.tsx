@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { format, formatDistanceToNowStrict, isToday } from "date-fns";
 import { Check, CirclePlus, Coffee, ListPlus, Pause, Play, Plus, Square, Trash2, X } from "lucide-react";
 import { Button, Card, CardHeader, Field, Input, PageHeader, Progress, Segmented, Select } from "@/components/ui";
@@ -72,8 +73,10 @@ function Setup() {
   const saved = useFocus((s) => s.prefs);
   const prefs = { ...DEFAULT_PREFS, ...saved };
   const setPrefs = useFocus((s) => s.setPrefs);
-  const [intention, setIntention] = useState("");
-  const [taskId, setTaskId] = useState("");
+  // Learning (and others) can open Focus ready to go: /focus?intention=…&task=…
+  const [params] = useSearchParams();
+  const [intention, setIntention] = useState(params.get("intention") ?? "");
+  const [taskId, setTaskId] = useState(params.get("task") ?? "");
   const [length, setLength] = useState<Length>((LENGTHS as readonly string[]).includes(prefs.length) ? (prefs.length as Length) : "50");
   const [custom, setCustom] = useState(String(prefs.customLength));
   const [brk, setBrk] = useState<Break>((BREAKS as readonly string[]).includes(prefs.brk) ? (prefs.brk as Break) : "10");

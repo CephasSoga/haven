@@ -20,7 +20,7 @@ export type NoteGroup = {
   id: string;
   name: string;
   /** What Haven made it for, so it finds it again (and shows the right icon) */
-  source?: { kind: "book" | "podcast"; id: string };
+  source?: { kind: "book" | "podcast" | "learning"; id: string };
   createdAt: number;
 };
 

@@ -17,6 +17,7 @@ import { useFocus } from "@/modules/focus/store";
 import { useAnnotations } from "@/modules/library/annotations";
 import { usePodcasts } from "@/modules/podcasts/store";
 import { useShelf } from "@/modules/audiobooks/store";
+import { useLearning } from "@/modules/learning/store";
 import { readVaultFile, useVault, type VaultFile } from "@/modules/vault/store";
 import { readDecisionsFile, useDecisions, type DecisionsFile } from "@/modules/decisions/store";
 
@@ -47,6 +48,7 @@ const STORES: Record<string, PersistedStore> = {
   "haven:annotations": useAnnotations,
   "haven:podcasts": usePodcasts,
   "haven:audiobook-shelf": useShelf,
+  "haven:learning": useLearning,
 };
 const VAULT = "haven:vault";
 /** Decisions travel like the vault: encrypted, and re-opened (or re-locked) when another device changes them. */

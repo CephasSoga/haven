@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { CalendarDays, Clapperboard, Library, MessagesSquare, Mic, BookHeadphones, Newspaper, NotebookPen, Podcast, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, Clapperboard, GraduationCap, Library, MessagesSquare, Mic, BookHeadphones, Newspaper, NotebookPen, Podcast, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
 
 export type ModuleDef = {
   id: string;
@@ -40,6 +40,7 @@ export const MODULES: ModuleDef[] = [
   { id: "library", name: "Library", path: "/library", icon: Library, accent: "#3b82f6", group: "leisure", page: lazy(() => import("./library/LibraryPage").then((m) => ({ default: m.LibraryPage }))) },
   { id: "podcasts", name: "Podcasts", path: "/podcasts", icon: Podcast, accent: "#9b5de5", group: "leisure", page: lazy(() => import("./podcasts/PodcastsPage").then((m) => ({ default: m.PodcastsPage }))) },
   { id: "audiobooks", name: "Audiobooks", path: "/audiobooks", icon: BookHeadphones, accent: "#c2410c", group: "leisure", page: lazy(() => import("./audiobooks/AudiobooksPage").then((m) => ({ default: m.AudiobooksPage }))) },
+  { id: "learning", name: "Learning", path: "/learning", icon: GraduationCap, accent: "#2f7d6d", group: "leisure", page: lazy(() => import("./learning/LearningPage").then((m) => ({ default: m.LearningPage }))) },
   { id: "releases", name: "Releases", path: "/releases", icon: Clapperboard, accent: "#0ea5b7", group: "leisure", page: lazy(() => import("./releases/ReleasesPage").then((m) => ({ default: m.ReleasesPage }))) },
   { id: "decisions", name: "Decisions", path: "/decisions", icon: Scale, accent: "#0f766e", group: "private", page: lazy(() => import("./decisions/DecisionsPage").then((m) => ({ default: m.DecisionsPage }))) },
   { id: "vault", name: "Vault", path: "/vault", icon: ShieldCheck, accent: "var(--pos)", group: "private", page: lazy(() => import("./vault/VaultPage").then((m) => ({ default: m.VaultPage }))) },
