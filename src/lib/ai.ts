@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { inApp } from "@/lib/platform";
+import { inApp, because } from "@/lib/platform";
 import { dismissNotice, showNotice } from "@/lib/notices";
 
 /**
@@ -325,7 +325,7 @@ async function post(name: string, url: string, key: string, body: unknown, signa
     res = await doFetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
   } catch (e) {
     if (signal?.aborted) throw e;
-    throw new AiError(inApp ? `Couldn't reach ${name}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
+    throw new AiError(inApp ? `Couldn't reach ${name}${because(e)}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
   }
   if (res.ok) return res.json();
   const detail = await res

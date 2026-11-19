@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Loader2, Pause, Play, RotateCcw, RotateCw, StickyNote, X } from "lucide-react";
 import { Button, Modal, Textarea } from "@/components/ui";
 import { groupFor, useNotes } from "@/modules/notes/store";
-import { close, currentTime, play, seekBy, seekTo, setSpeed, SPEEDS, toggle, usePlayer } from "./player";
+import { close, currentTime, play, seekBy, seekTo, setSpeed, SPEEDS, toggle, usePlayer, useShowInfo } from "./player";
 import { clock, usePodcasts } from "./store";
 
 /**
@@ -13,7 +13,7 @@ import { clock, usePodcasts } from "./store";
  */
 export function PlayerBar() {
   const { episode, playing, loading, position, duration, error } = usePlayer();
-  const show = usePodcasts((s) => s.shows.find((x) => x.id === episode?.showId));
+  const show = useShowInfo(episode?.showId);
   const speed = usePodcasts((s) => s.speed);
   const navigate = useNavigate();
   const [noteAt, setNoteAt] = useState<number | null>(null);
@@ -53,7 +53,15 @@ export function PlayerBar() {
             </div>
             <div className="flex items-center gap-2 px-2.5 py-2 sm:gap-3 sm:px-3">
               <button
-                onClick={() => navigate(`/podcasts?show=${episode.showId}`)}
+                onClick={() =>
+                  navigate(
+                    episode.showId.startsWith("book:")
+                      ? `/audiobooks?mine=${episode.showId.slice(5)}`
+                      : episode.showId.startsWith("ia:")
+                        ? `/audiobooks?book=${encodeURIComponent(episode.showId.slice(3))}`
+                        : `/podcasts?show=${episode.showId}`,
+                  )
+                }
                 className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 title="Open the show"
               >
@@ -109,7 +117,7 @@ function IconBtn({ label, onClick, className, children }: { label: string; onCli
 /** A note about this moment of the episode, saved in Notes in a group named after the show. */
 export function MomentNote({ at, onClose }: { at: number | null; onClose: () => void }) {
   const episode = usePlayer((s) => s.episode);
-  const show = usePodcasts((s) => s.shows.find((x) => x.id === episode?.showId));
+  const show = useShowInfo(episode?.showId);
   const [text, setText] = useState("");
   const [saved, setSaved] = useState(false);
   useEffect(() => {
@@ -120,7 +128,13 @@ export function MomentNote({ at, onClose }: { at: number | null; onClose: () => 
     const note = text.trim();
     if (!note || !episode || at === null) return;
     const showName = show?.title ?? "Podcasts";
-    const groupId = groupFor({ kind: "podcast", id: episode.showId }, showName);
+    // A book's chapter: into the book's group, with its quotes and notes.
+    // A book (your own, or a LibriVox one): into the book's group, with its quotes and notes.
+    const groupId = episode.showId.startsWith("book:")
+      ? groupFor({ kind: "book", id: episode.showId.slice(5) }, showName)
+      : episode.showId.startsWith("ia:")
+        ? groupFor({ kind: "book", id: episode.showId }, showName)
+        : groupFor({ kind: "podcast", id: episode.showId }, showName);
     useNotes.getState().create({
       title: note.split("\n")[0].slice(0, 60),
       body: `${note}\n\n— ${episode.title} · ${showName}, at ${clock(at)}`,

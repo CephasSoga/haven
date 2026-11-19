@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
-import { ChevronLeft, ChevronRight, Highlighter, Minus, Plus, StickyNote } from "lucide-react";
+import { ChevronLeft, ChevronRight, Headphones, Highlighter, Minus, Plus, StickyNote } from "lucide-react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Book as EpubBook, Rendition } from "epubjs";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,10 @@ import { BookTransferError, downloadBook } from "@/lib/sync";
 import { useLibrary, type Book } from "./store";
 import { cleanPassage, MARKS, useAnnotations, type Annotation, type Rect, type Selection } from "./annotations";
 import { AnnotationsPanel, NoteDialog, SelectionBar } from "./Annotate";
+import { ListenBar } from "./Listen";
+import { startReading, stopReading, useReadAloud, type ReadSource } from "./readAloud";
+import { sentencesIn, type Sentence } from "./sentences";
+import { detectLang, type Lang } from "./voices";
 
 type Paper = "paper" | "sepia" | "night";
 const PAPERS: Record<Paper, { bg: string; fg: string; label: string }> = {
@@ -28,6 +32,8 @@ type Nav = {
   here?: () => Selection;
   /** Drops the text selection */
   clear?: () => void;
+  /** The book's text from where you are, for reading aloud */
+  readAloud?: () => ReadSource;
 };
 type OnSelect = (s: Selection | null) => void;
 type Progress = (progress: number, location: string, label?: string) => void;
@@ -53,6 +59,9 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
   const items = useAnnotations((s) => s.items);
   const marks = useMemo(() => items.filter((a) => a.bookId === book.id), [items, book.id]);
   const writing = !!noteFor || !!editing;
+  const listening = useReadAloud((s) => s.status !== "idle");
+  // Reading stops with the book.
+  useEffect(() => () => stopReading(), []);
   const usedSelection = () => {
     nav.current.clear?.();
     setSelection(null);
@@ -148,6 +157,15 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
               <StickyNote className="size-4" /> <span className="max-sm:hidden">Note</span>
             </button>
             <button
+              onClick={() => (listening ? stopReading() : nav.current.readAloud && void startReading(nav.current.readAloud()))}
+              aria-pressed={listening}
+              title={listening ? "Stop reading aloud" : "Read aloud from here"}
+              className="flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[13px] font-medium opacity-75 transition-opacity hover:opacity-100"
+              style={{ background: listening ? `${theme.fg}1f` : `${theme.fg}0d` }}
+            >
+              <Headphones className="size-4" /> <span className="max-sm:hidden">Listen</span>
+            </button>
+            <button
               onClick={() => setPanel((p) => !p)}
               aria-pressed={panel}
               title="Highlights & notes in this book"
@@ -224,7 +242,9 @@ export function Reader({ book, onClose }: { book: Book; onClose: () => void }) {
           </span>
         </button>
 
+        <ListenBar theme={theme} />
         <SelectionBar
+          raised={listening}
           book={live}
           selection={selection}
           theme={theme}
@@ -334,6 +354,8 @@ function PdfView({
   const textLayer = useRef<HTMLDivElement>(null);
   const select = useRef(onSelect);
   select.current = onSelect;
+  // The sentence being read aloud, as rectangles on the page.
+  const [reading, setReading] = useState<Rect[] | null>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(start);
   const [zoom, setZoomState] = useState(1);
@@ -389,6 +411,60 @@ function PdfView({
     goTo: (a) => a.page && setPage(a.page),
     here: () => ({ text: "", page: current, where: `p. ${current}` }),
     clear: () => document.getSelection()?.removeAllRanges(),
+    readAloud: () => {
+      let page = current;
+      let first = true;
+      let lang: Lang | null = null;
+      /** The text layer once it's drawn for `p`. */
+      const layerFor = async (p: number) => {
+        for (let i = 0; i < 150; i++) {
+          const l = textLayer.current;
+          if (l?.dataset.page === String(p)) return l;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return null;
+      };
+      return {
+        next: async () => {
+          if (!first) {
+            if (page >= total) return null;
+            page += 1;
+            setPage(page);
+          }
+          first = false;
+          const layer = await layerFor(page);
+          if (!layer) return null;
+          const lb = layer.getBoundingClientRect();
+          // Running heads, footers and page numbers sit in the top and bottom margins: leave short lines there out.
+          const margin = (el: Element) => {
+            if (el.tagName !== "SPAN" || el.parentElement !== layer) return false;
+            const r = el.getBoundingClientRect();
+            const y = (r.top + r.height / 2 - lb.top) / lb.height;
+            return (y < 0.07 || y > 0.93) && (el.textContent ?? "").trim().length < 70;
+          };
+          const all = sentencesIn(layer, lang ?? "en", { skip: margin });
+          lang ??= detectLang(all.map((s) => s.text).join(" "));
+          return { lang, sentences: all };
+        },
+        show: (s: Sentence) => {
+          const layer = textLayer.current;
+          if (!layer) return;
+          const lb = layer.getBoundingClientRect();
+          const rects = [...s.range.getClientRects()]
+            .filter((r) => r.width > 1 && r.height > 1)
+            .map((r) => ({ x: (r.left - lb.left) / lb.width, y: (r.top - lb.top) / lb.height, w: r.width / lb.width, h: r.height / lb.height }));
+          setReading(mergeRects(rects));
+          // Zoomed in: keep the sentence on screen.
+          const el = box.current;
+          const top = rects[0] ? lb.top + rects[0].y * lb.height : null;
+          if (el && top !== null) {
+            const view = el.getBoundingClientRect();
+            if (top < view.top + 40 || top > view.bottom - 80) el.scrollBy({ top: top - view.top - view.height / 3, behavior: "smooth" });
+          }
+        },
+        clear: () => setReading(null),
+      };
+    },
   };
 
   // A passage selected on this page: where it sits, as fractions of the page, so its highlight
@@ -459,10 +535,12 @@ function PdfView({
         const { pdfjs } = await import("./pdf");
         if (cancelled) return;
         layer.replaceChildren();
+        delete layer.dataset.page;
         layer.style.setProperty("--total-scale-factor", String(scale));
         const t = new pdfjs.TextLayer({ textContentSource: p.streamTextContent(), container: layer, viewport: p.getViewport({ scale }) });
         text = t;
         await t.render().catch(() => {});
+        if (!cancelled) layer.dataset.page = String(current);
       }
       await task.promise.catch(() => {});
     })();
@@ -527,6 +605,17 @@ function PdfView({
                 )),
               )}
           </div>
+          {reading && (
+            <div className="pointer-events-none absolute inset-0" aria-hidden>
+              {reading.map((r, i) => (
+                <div
+                  key={i}
+                  className="absolute rounded-[3px] transition-all duration-200"
+                  style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%`, background: "#60a5fa", opacity: night ? 0.3 : 0.28, mixBlendMode: night ? "normal" : "multiply" }}
+                />
+              ))}
+            </div>
+          )}
           <div ref={textLayer} className="textLayer" style={{ ["--scale-round-x" as string]: "1px", ["--scale-round-y" as string]: "1px" }} />
         </div>
       </div>
@@ -588,7 +677,7 @@ function EpubView({
     let alive = true;
     let shown = false;
     (async () => {
-      const { default: ePub } = await import("epubjs");
+      const { default: ePub, EpubCFI } = await import("epubjs");
       const data = await blob.arrayBuffer();
       // Closed (or reopened) while the file was being read: don't draw a second copy of the book.
       if (!alive || !host.current) return;
@@ -638,12 +727,72 @@ function EpubView({
         });
       });
       const contentsList = () => (r.getContents() as unknown as { window: Window }[]) ?? [];
+      const epub = book;
+      type Contents = { document: Document; range: (cfi: string) => Range; cfiFromRange: (r: Range) => string };
       nav.current = {
         prev: () => r.prev(),
         next: () => r.next(),
         goTo: (a) => a.cfi && r.display(a.cfi),
         here: () => ({ text: "", cfi: place.current.cfi, where: place.current.where }),
         clear: () => contentsList().forEach((c) => c.window.getSelection()?.removeAllRanges()),
+        readAloud: () => {
+          const metaLang = (epub.packaging?.metadata as { language?: string } | undefined)?.language;
+          let lang: Lang | null = null;
+          let first = true;
+          let contents: Contents | null = null;
+          let shown: string | null = null;
+          const location = () => r.currentLocation() as unknown as { start: { cfi: string; href: string }; end: { cfi: string } };
+          return {
+            next: async () => {
+              if (first) {
+                first = false;
+                contents = (r.getContents() as unknown as Contents[])[0] ?? null;
+                if (!contents) return null;
+                // From the top of the page you're on.
+                let from: { node: Node; offset: number } | undefined;
+                try {
+                  const start = contents.range(location().start.cfi);
+                  from = { node: start.startContainer, offset: start.startOffset };
+                } catch {
+                  /* from the start of the chapter */
+                }
+                const sample = contents.document.body.textContent ?? "";
+                lang ??= detectLang(sample, metaLang);
+                return { lang, sentences: sentencesIn(contents.document.body, lang, { from }) };
+              }
+              // On to the next chapter.
+              const section = epub.spine.get(location().start.href) as unknown as { next: () => { href: string } | undefined } | null;
+              const following = section?.next();
+              if (!following) return null;
+              await r.display(following.href);
+              contents = (r.getContents() as unknown as Contents[])[0] ?? null;
+              if (!contents) return null;
+              return { lang: lang ?? "en", sentences: sentencesIn(contents.document.body, lang ?? "en") };
+            },
+            show: (s: Sentence) => {
+              if (!contents) return;
+              let cfi: string;
+              try {
+                cfi = contents.cfiFromRange(s.range);
+              } catch {
+                return;
+              }
+              if (shown) r.annotations.remove(shown, "highlight");
+              r.annotations.highlight(cfi, {}, () => {}, "haven-reading", { fill: "#60a5fa", "fill-opacity": "0.3", "mix-blend-mode": "multiply" });
+              shown = cfi;
+              // Turn the page when the sentence has gone past it.
+              try {
+                if (new EpubCFI().compare(cfi, location().end.cfi) > 0) void r.display(cfi);
+              } catch {
+                /* keep going */
+              }
+            },
+            clear: () => {
+              if (shown) r.annotations.remove(shown, "highlight");
+              shown = null;
+            },
+          };
+        },
       };
       await r.display(start || undefined);
       shown = true;
@@ -659,7 +808,9 @@ function EpubView({
     });
     return () => {
       alive = false;
-      book?.destroy();
+      // Closing it while epub.js is still opening it makes epub.js throw; let it finish first.
+      const b = book;
+      if (b) void Promise.race([Promise.all([b.opened, b.loaded.navigation]), new Promise((r) => setTimeout(r, 5000))]).catch(() => {}).finally(() => b.destroy());
     };
     // Re-open only for a different file.
   }, [blob]); // eslint-disable-line react-hooks/exhaustive-deps

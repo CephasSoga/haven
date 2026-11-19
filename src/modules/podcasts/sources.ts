@@ -1,4 +1,4 @@
-import { inApp } from "@/lib/platform";
+import { because, inApp } from "@/lib/platform";
 import { showIdFor, type Episode, type Show } from "./store";
 
 /**
@@ -26,8 +26,8 @@ export async function searchShows(term: string, country = navigator.language.spl
   let res: Response;
   try {
     res = await get(`https://itunes.apple.com/search?${qs}`);
-  } catch {
-    throw new PodcastError("Couldn't reach the podcast directory. Check your internet connection.");
+  } catch (e) {
+    throw new PodcastError(`Couldn't reach the podcast directory${because(e)}. Check your internet connection.`);
   }
   if (!res.ok) throw new PodcastError(`The podcast directory answered ${res.status}.`);
   const data = (await res.json()) as { results?: { collectionName?: string; artistName?: string; artworkUrl600?: string; artworkUrl100?: string; feedUrl?: string; collectionViewUrl?: string }[] };
@@ -44,8 +44,8 @@ async function feedText(url: string) {
     let res: Response;
     try {
       res = await get(url);
-    } catch {
-      throw new PodcastError("Couldn't reach this show's feed. Check your internet connection.");
+    } catch (e) {
+      throw new PodcastError(`Couldn't reach this show's feed${because(e)}. Check your internet connection.`);
     }
     if (!res.ok) throw new PodcastError(`This show's feed answered ${res.status}.`);
     return res.text();

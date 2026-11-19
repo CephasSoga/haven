@@ -18,6 +18,7 @@ import { readDecisionsFile, useDecisions } from "@/modules/decisions/store";
 import { useFocus } from "@/modules/focus/store";
 import { useAnnotations } from "@/modules/library/annotations";
 import { usePodcasts } from "@/modules/podcasts/store";
+import { useShelf } from "@/modules/audiobooks/store";
 import { AI_PROVIDERS, explain, testConnection, useAi, type AiProvider } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
@@ -93,6 +94,7 @@ export function SettingsPage() {
       focus: (({ sessions, goal }) => ({ sessions, goal }))(useFocus.getState()),
       annotations: { items: useAnnotations.getState().items },
       podcasts: (({ shows, listens, queue, speed }) => ({ shows, listens, queue, speed }))(usePodcasts.getState()),
+      audiobooks: { books: useShelf.getState().books },
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -126,6 +128,7 @@ export function SettingsPage() {
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
       if (data.subscriptions?.subs) useSubscriptions.setState({ subs: data.subscriptions.subs, dismissed: data.subscriptions.dismissed ?? [] });
       if (data.releases?.genres) useReleases.setState({ kinds: data.releases.kinds, genres: data.releases.genres, follows: data.releases.follows ?? {}, platforms: data.releases.platforms ?? null });
+      if (data.audiobooks?.books) useShelf.setState({ books: data.audiobooks.books });
       if (data.podcasts?.shows) usePodcasts.setState({ shows: data.podcasts.shows, listens: data.podcasts.listens ?? {}, queue: data.podcasts.queue ?? [], speed: data.podcasts.speed ?? 1 });
       if (data.annotations?.items) useAnnotations.setState({ items: data.annotations.items });
       if (data.focus?.sessions) useFocus.setState({ sessions: data.focus.sessions, goal: data.focus.goal ?? 180 });
@@ -243,6 +246,7 @@ export function SettingsPage() {
               useFocus.setState({ active: null, breakUntil: null, review: null, sessions: [], quiet: null });
               useAnnotations.setState({ items: [] });
               usePodcasts.setState({ shows: [], listens: {}, queue: [] });
+              useShelf.setState({ books: {} });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");

@@ -16,6 +16,7 @@ import { RecordingPill } from "@/modules/meetings/RecordingPill";
 import { FocusPill } from "@/modules/focus/FocusPill";
 import { PlayerBar } from "@/modules/podcasts/PlayerBar";
 import { usePodcastChecker } from "@/modules/podcasts/player";
+import { useAudiobookRunner } from "@/modules/library/audiobook";
 import { useFocusEngine } from "@/modules/focus/engine";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
@@ -84,6 +85,7 @@ function Main() {
   useBackgroundMode();
   useFocusEngine();
   usePodcastChecker();
+  useAudiobookRunner();
   useReleaseChecker();
   return (
     <HashRouter>

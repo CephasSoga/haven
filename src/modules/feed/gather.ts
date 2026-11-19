@@ -1,3 +1,4 @@
+import { because } from "@/lib/platform";
 import { format } from "date-fns";
 import { AiError, aiReady, askJson, assistantName } from "@/lib/ai";
 import { todayKey } from "@/lib/dates";
@@ -145,12 +146,14 @@ export async function gather(
   const jobs = plans.flatMap((p, pi) => p.feeds.map((url) => ({ pi, url })));
   let done = 0;
   let missingProxy = false;
+  let firstError: unknown = null;
   onStep?.(`Reading ${jobs.length} news feeds…`);
   const results = await pool(jobs, 6, async (j) => {
     try {
       return await fetchFeed(j.url);
     } catch (e) {
       if (e instanceof Error && e.message === "NO_PROXY") missingProxy = true;
+      firstError ??= e;
       return [] as Candidate[];
     } finally {
       onStep?.(`Reading news feeds… ${++done} of ${jobs.length}`);
@@ -158,7 +161,7 @@ export async function gather(
   });
   if (missingProxy && results.every((r) => !r.length))
     throw new AiError("The news fetcher isn't running. Start Haven with “npm run dev” (or “npm run preview”) and open it from there.");
-  if (results.every((r) => !r.length)) throw new AiError("No news could be fetched. Check your internet connection and try again.");
+  if (results.every((r) => !r.length)) throw new AiError(`No news could be fetched${because(firstError)}. Check your internet connection and try again.`);
 
   onStep?.("Finding the stories everyone is covering…");
   const cutoff = Date.now() - 48 * 3_600_000;

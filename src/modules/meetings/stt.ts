@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { inApp } from "@/lib/platform";
+import { because, inApp } from "@/lib/platform";
 import { useAi } from "@/lib/ai";
 
 /**
@@ -111,9 +111,9 @@ export async function cloudTranscribe(audio: Float32Array, language: string, con
   let res: Response;
   try {
     res = await doFetch(url, { method: "POST", headers: { Authorization: `Bearer ${svc.key}` }, body: form });
-  } catch {
+  } catch (e) {
     // In a browser tab (not the apps), the service may also refuse to answer web pages directly.
-    throw new SttError(inApp ? `Couldn't reach ${name}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
+    throw new SttError(inApp ? `Couldn't reach ${name}${because(e)}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
   }
   if (res.status === 401) throw new SttError(`${name} didn't accept the API key. Check it in Settings.`);
   if (res.status === 429) throw new SttError("The transcription service is rate limiting — some lines will be transcribed on this device.");

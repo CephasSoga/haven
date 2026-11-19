@@ -64,8 +64,9 @@ export const useLibrary = create<LibraryState>()(
       remove: async (id) => {
         await deleteFile(id);
         set((s) => ({ books: s.books.filter((b) => b.id !== id) }));
-        // Its highlights go with it; its page in Notes stays.
+        // Its highlights and audio go with it; what's in Notes stays.
         useAnnotations.getState().removeBook(id);
+        void import("./audiobook").then((m) => m.deleteAudiobook(id));
       },
       replaceAll: (books) => set({ books }),
     }),

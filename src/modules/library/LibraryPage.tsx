@@ -3,12 +3,13 @@ import { ask } from "@/components/confirm";
 import { useSearchParams } from "react-router";
 import { formatDistanceToNowStrict } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { BookOpen, BookPlus, Check, CheckCircle2, Clock, Download, HardDrive, MoreHorizontal, Pencil, Search, Share2, Trash2, Upload } from "lucide-react";
+import { BookOpen, BookPlus, Check, CheckCircle2, Clock, Download, HardDrive, Headphones, MoreHorizontal, Pencil, Search, Share2, Trash2, Upload } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Segmented, Select } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { describe, formatOf } from "./extract";
 import { formatBytes, keepFiles, putFile, storageUsed } from "./files";
 import { Reader } from "./Reader";
+import { AudiobookDialog } from "./AudiobookDialog";
 import { saveBookCopy, SHARE_MESSAGES, shareBook } from "./share";
 import { BookTransferError, bookTooLarge, deleteBook, uploadBook } from "@/lib/sync";
 import { isStorageFull, showNotice, STORAGE_FULL } from "@/lib/notices";
@@ -44,6 +45,7 @@ export function LibraryPage() {
   const [adding, setAdding] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
+  const [audio, setAudio] = useState<Book | null>(null);
   const [storage, setStorage] = useState<{ used: number; quota: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -260,6 +262,7 @@ export function LibraryPage() {
                       onSave={() => void saveCopy(b)}
                       onStatus={(status) => update(b.id, { status, finishedAt: status === "finished" ? Date.now() : undefined, progress: status === "finished" ? 1 : b.progress })}
                       onDelete={() => void deleteWithConfirm(b)}
+                      onAudio={() => setAudio(b)}
                     />
                   ))}
                 </AnimatePresence>
@@ -288,6 +291,7 @@ export function LibraryPage() {
 
       <AnimatePresence>{reading && <Reader key={reading.id} book={reading} onClose={close} />}</AnimatePresence>
       <EditDialog book={editing} onClose={() => setEditing(null)} onShare={(b) => void share(b)} onDelete={deleteWithConfirm} />
+      <AudiobookDialog book={audio} onClose={() => setAudio(null)} />
     </div>
   );
 }
@@ -309,6 +313,7 @@ type TileActions = {
   onSave: () => void;
   onStatus: (s: BookStatus) => void;
   onDelete: () => void;
+  onAudio: () => void;
 };
 
 function BookTile({ book, ...a }: { book: Book } & TileActions) {
@@ -330,6 +335,9 @@ function BookTile({ book, ...a }: { book: Book } & TileActions) {
       </MenuItem>
       <MenuItem onClick={() => (a.onSave(), close())}>
         <Download className="size-3.5" /> Save a copy
+      </MenuItem>
+      <MenuItem onClick={() => (a.onAudio(), close())}>
+        <Headphones className="size-3.5" /> Make an audiobook…
       </MenuItem>
       <div className="my-1 h-px bg-line" />
       {(Object.keys(STATUS_LABEL) as BookStatus[]).map((st) => (

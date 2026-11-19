@@ -32,10 +32,13 @@ export function SelectionBar({
   theme,
   onDone,
   onNote,
+  raised = false,
 }: {
   book: Book;
   selection: Selection | null;
   theme: Theme;
+  /** Sit higher, above the read-aloud controls */
+  raised?: boolean;
   /** The selection was used: clear it */
   onDone: () => void;
   onNote: (s: Selection) => void;
@@ -70,7 +73,7 @@ export function SelectionBar({
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 8 }}
-          className="pointer-events-auto absolute bottom-4 left-1/2 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 rounded-2xl p-1.5 shadow-float"
+          className={cn("pointer-events-auto absolute left-1/2 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 rounded-2xl p-1.5 shadow-float", raised ? "bottom-16" : "bottom-4")}
           style={{ background: theme.fg, color: theme.bg }}
           onMouseDown={keep}
         >

@@ -4,6 +4,8 @@ import { persist } from "zustand/middleware";
 import { notify } from "@/lib/notify";
 import { fetchShow } from "./sources";
 import { usePodcastCache, usePodcasts, type EpisodeRef } from "./store";
+import { useLibrary } from "@/modules/library/store";
+import { useShelf } from "@/modules/audiobooks/store";
 
 /**
  * The podcast player belongs to the app, not to a screen: it keeps playing while you look at
@@ -34,7 +36,43 @@ export const SPEEDS = [0.8, 1, 1.2, 1.5, 1.75, 2];
 let audio: HTMLAudioElement | null = null;
 let lastSaved = 0;
 
-const showOf = (ep: EpisodeRef) => usePodcasts.getState().shows.find((s) => s.id === ep.showId);
+/** A show's name and picture — a podcast you follow, or a book from your Library made into audio. */
+export function showInfo(showId: string | undefined): { title: string; author?: string; artwork?: string } | undefined {
+  if (!showId) return undefined;
+  const show = usePodcasts.getState().shows.find((s) => s.id === showId);
+  if (show) return show;
+  if (showId.startsWith("ia:")) {
+    const b = useShelf.getState().books[showId.slice(3)];
+    return b ? { title: b.title, author: b.author, artwork: b.cover } : undefined;
+  }
+  const book = showId.startsWith("book:") ? useLibrary.getState().books.find((b) => `book:${b.id}` === showId) : undefined;
+  return book ? { title: book.title, author: book.author, artwork: book.cover } : undefined;
+}
+
+export function useShowInfo(showId: string | undefined) {
+  const shows = usePodcasts((s) => s.shows);
+  const books = useLibrary((s) => s.books);
+  const shelf = useShelf((s) => s.books);
+  void shows;
+  void books;
+  void shelf;
+  return showInfo(showId);
+}
+
+const showOf = (ep: EpisodeRef) => showInfo(ep.showId);
+
+/** Where an episode's sound is: on the web, or (a book's chapter) on this device. */
+let localUrl: string | null = null;
+async function sourceOf(ep: EpisodeRef) {
+  if (!ep.audio.startsWith("audiobook:")) return ep.audio;
+  const [, bookId, i] = ep.audio.split(":");
+  const { chapterAudio } = await import("@/modules/library/audiobook");
+  const blob = await chapterAudio(bookId, Number(i));
+  if (!blob) throw new Error("missing");
+  if (localUrl) URL.revokeObjectURL(localUrl);
+  localUrl = URL.createObjectURL(blob);
+  return localUrl;
+}
 
 function save(force = false) {
   const { episode } = usePlayer.getState();
@@ -65,9 +103,12 @@ function element() {
     const ep = usePlayer.getState().episode;
     if (ep) usePodcasts.getState().setPlayed(ep.id, true);
     set({ playing: false });
-    // On to the next one in "Up next".
-    const next = usePodcasts.getState().queue.find((e) => e.id !== ep?.id);
-    if (next) void play(next);
+    // An audiobook carries on with its next chapter; otherwise, on to the next one in "Up next".
+    void (async () => {
+      const { nextChapter } = await import("@/modules/audiobooks/store");
+      const next = (ep && (await nextChapter(ep))) ?? usePodcasts.getState().queue.find((e) => e.id !== ep?.id);
+      if (next) void play(next);
+    })();
   });
   audio.addEventListener("error", () => set({ playing: false, loading: false, error: "This episode couldn't be played. The show may have moved or removed it." }));
   wireMediaKeys();
@@ -83,13 +124,19 @@ export async function play(ep: EpisodeRef) {
     const listen = usePodcasts.getState().listens[ep.id];
     const start = listen && !listen.played ? listen.position : 0;
     usePlayer.setState({ episode: ep, position: start, duration: listen?.duration ?? ep.duration ?? 0, loading: true, error: null });
-    a.src = ep.audio;
+    try {
+      a.src = await sourceOf(ep);
+    } catch {
+      usePlayer.setState({ playing: false, loading: false, error: "This chapter's audio isn't on this device." });
+      return;
+    }
     a.currentTime = start;
     usePodcasts.getState().dequeue(ep.id);
     if (listen?.played) usePodcasts.getState().setPlayed(ep.id, false);
   }
   a.playbackRate = usePodcasts.getState().speed;
   setMetadata(ep);
+  if (ep.showId.startsWith("ia:")) useShelf.getState().touch(ep.showId.slice(3));
   try {
     await a.play();
   } catch (e) {

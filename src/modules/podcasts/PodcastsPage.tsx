@@ -6,7 +6,7 @@ import { Button, Card, CardHeader, EmptyState, IconButton, Input, PageHeader } f
 import { ask } from "@/components/confirm";
 import { cn } from "@/lib/utils";
 import { fetchShow, PodcastError, searchShows, type Found } from "./sources";
-import { play, pause, refreshShows, usePlayer } from "./player";
+import { play, pause, refreshShows, usePlayer, useShowInfo } from "./player";
 import { clock, length, ref, usePodcastCache, usePodcasts, type Episode, type EpisodeRef, type Show } from "./store";
 
 const ACCENT = "#9b5de5";
@@ -101,6 +101,7 @@ function Home({ openShow, openFeed }: { openShow: (id: string) => void; openFeed
             )}
           </Card>
         </div>
+        <div className="flex flex-col gap-6">
         {shows.length > 0 && (
           <Card>
             <CardHeader title="Your shows" subtitle={`${shows.length} followed`} />
@@ -115,6 +116,7 @@ function Home({ openShow, openFeed }: { openShow: (id: string) => void; openFeed
             </ul>
           </Card>
         )}
+        </div>
       </div>
     </>
   );
@@ -132,7 +134,7 @@ function ShowTile({ show, onClick }: { show: Show; onClick: () => void }) {
   );
 }
 
-function Art({ src, className }: { src?: string; className?: string }) {
+export function Art({ src, className }: { src?: string; className?: string }) {
   const [broken, setBroken] = useState(false);
   return src && !broken ? (
     <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} className={cn("bg-sunken object-cover", className)} />
@@ -340,10 +342,11 @@ function when(ms: number) {
   return format(ms, isThisYear(ms) ? "MMM d" : "MMM d, yyyy");
 }
 
-function EpisodeRow({ episode, showName, isNew }: { episode: Episode | EpisodeRef; showName?: boolean; isNew?: boolean }) {
+export function EpisodeRow({ episode, showName, isNew }: { episode: Episode | EpisodeRef; showName?: boolean; isNew?: boolean }) {
   const listen = usePodcasts((s) => s.listens[episode.id]);
   const inQueue = usePodcasts((s) => s.queue.some((e) => e.id === episode.id));
-  const show = usePodcasts((s) => s.shows.find((x) => x.id === episode.showId));
+  const show = useShowInfo(episode.showId);
+  const isBook = episode.showId.startsWith("book:") || episode.showId.startsWith("ia:");
   const { enqueue, dequeue, setPlayed } = usePodcasts.getState();
   const current = usePlayer((s) => s.episode?.id === episode.id);
   const playing = usePlayer((s) => s.playing && s.episode?.id === episode.id);
@@ -368,7 +371,7 @@ function EpisodeRow({ episode, showName, isNew }: { episode: Episode | EpisodeRe
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted">
             {showName && show && <span className="truncate font-medium">{show.title}</span>}
             {showName && show && <span>·</span>}
-            <span>{when(episode.published)}</span>
+            {!isBook && <span>{when(episode.published)}</span>}
             {total > 0 && <span>· {started ? `${length(left)} left` : length(total)}</span>}
             {listen?.played && (
               <span className="flex items-center gap-0.5">

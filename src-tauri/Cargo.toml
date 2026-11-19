@@ -12,21 +12,25 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# Each plugin is held to the minor version of its JavaScript half in package.json (patch updates
+# only): the two halves talk to each other, and a newer Rust half can stop understanding an older
+# JavaScript half. (tauri-plugin-http 2.9 did exactly that, and every request failed as "offline".)
+# Raise both together.
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "~2.12", features = ["tray-icon"] }
 # The code Tauri generates from plugin settings in tauri.conf.json (the updater's) uses it.
 serde_json = "1"
-tauri-plugin-http = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-process = "2"
+tauri-plugin-http = "~2.9"
+tauri-plugin-notification = "~2.8"
+tauri-plugin-opener = "~2.7"
+tauri-plugin-process = "~2.4"
 
 # Updating in place is a desktop feature; on Android the app points you to the new .apk instead.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "~2.14"
 # Tray, starting with the computer, and one Haven at a time.
-tauri-plugin-autostart = "2"
-tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "~2.7"
+tauri-plugin-single-instance = "~2.5"
 
 [profile.release]
 codegen-units = 1
