@@ -137,6 +137,10 @@ class ServiceError extends AiError {
     message: string,
     public status: number,
     public detail?: string,
+    /** The service's own error code, e.g. Groq's "json_validate_failed" */
+    public code?: string,
+    /** What the model wrote before the service rejected it (Groq) */
+    public failed?: string,
   ) {
     super(message);
   }
@@ -328,11 +332,12 @@ async function post(name: string, url: string, key: string, body: unknown, signa
     throw new AiError(inApp ? `Couldn't reach ${name}${because(e)}. Check your internet connection.` : `Couldn't reach ${name} from this browser — check your connection, or use the Haven app.`);
   }
   if (res.ok) return res.json();
-  const detail = await res
+  const error = await res
     .json()
-    .then((j: { error?: { message?: string } }) => j.error?.message)
+    .then((j: { error?: { message?: string; code?: string; failed_generation?: string } }) => j.error)
     .catch(() => undefined);
-  const fail = (message: string) => new ServiceError(message, res.status, detail);
+  const detail = error?.message;
+  const fail = (message: string) => new ServiceError(message, res.status, detail, error?.code, error?.failed_generation);
   if (res.status === 401) throw fail(`${name} didn't accept the API key. Check it in Settings.`);
   if (res.status === 404) throw fail(`${name} doesn't offer that model to your key${detail ? ` (${detail})` : ""}. Pick another model in Settings.`);
   if (res.status === 429) throw fail(`Rate limited by ${name} — wait a minute and try again.`);
@@ -363,7 +368,7 @@ function tokensPerMinute(detail?: string) {
 
 async function viaGroq(req: JsonRequest, key: string, model: string) {
   type Out = { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string } }[] };
-  const ask = (maxTokens: number) =>
+  const ask = (maxTokens: number, effort: string) =>
     post("Groq", "https://api.groq.com/openai/v1/chat/completions", key, {
       model,
       messages: [
@@ -372,18 +377,42 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
       ],
       response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
       max_completion_tokens: maxTokens,
+      // GPT-OSS thinks before answering, and the thinking comes out of the same allowance as the answer.
+      ...(model.includes("gpt-oss") ? { reasoning_effort: effort } : {}),
     }, req.signal) as Promise<Out>;
   const wanted = Math.min(req.maxTokens ?? 16000, 65536);
   // Groq counts the longest answer allowed against the allowance, so allow only what fits.
   let reading = estimateTokens(req.system + req.user + JSON.stringify(req.schema)) + 50;
   let max = Math.max(1000, Math.min(wanted, groqTpm - reading - 256));
+  // With little room, think briefly so the answer itself fits; "high" is only worth it with plenty.
+  const thinking = () => (max < 4000 ? "low" : req.effort === "high" && max >= 12000 ? "high" : req.effort === "low" ? "low" : "medium");
+  let effort = thinking();
+  let retriedShorter = false;
   let res: Out;
   for (let attempt = 0; ; attempt++) {
     await pace(reading + max, req.signal);
     try {
-      res = await ask(max);
+      res = await ask(max, effort);
       break;
     } catch (e) {
+      // The answer didn't fit the requested shape — usually because it ran out of room and stopped mid-way.
+      if (e instanceof ServiceError && e.code === "json_validate_failed") {
+        // Often what it wrote is fine after all (Groq is strict about the shape); use it when it reads as JSON.
+        if (e.failed) {
+          try {
+            JSON.parse(e.failed);
+            return e.failed;
+          } catch {
+            /* cut off: try again */
+          }
+        }
+        if (!retriedShorter) {
+          retriedShorter = true;
+          effort = "low";
+          continue;
+        }
+        throw new AiTooLong();
+      }
       const tpm = e instanceof ServiceError && (e.status === 413 || e.status === 429) ? tokensPerMinute(e.detail) : null;
       if (!tpm) throw e;
       if (attempt >= 2) throw new AiError(`Groq's per-minute token allowance (${tpm.limit.toLocaleString()} on your plan) is used up — wait a minute and try again.`);
@@ -395,6 +424,7 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
           `This is more than your Groq plan allows in a minute (${tpm.limit.toLocaleString()} tokens; reading this alone takes about ${reading.toLocaleString()}). Try a shorter request, Groq's paid tier, or another AI service in Settings.`,
         );
       max = Math.min(wanted, room);
+      effort = thinking();
       // It would have fitted: the minute's allowance was simply used up. Wait for it to refill.
       if (tpm.requested <= tpm.limit) spent.push({ at: Date.now(), tokens: tpm.limit });
     }

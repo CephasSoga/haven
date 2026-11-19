@@ -172,32 +172,37 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
     }
   }
 
-  const isDate = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
-  const isTime = (t: string | null) => !!t && /^\d{2}:\d{2}$/.test(t);
+  const isDate = (d: string | null | undefined): d is string => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
+  const isTime = (t: string | null | undefined): t is string => !!t && /^\d{2}:\d{2}$/.test(t);
+  // An answer recovered from a format check can miss a field; nothing missing should break the page.
+  const list = <T,>(v: T[] | undefined | null) => (Array.isArray(v) ? v : []);
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
   return {
-    title: raw.title,
-    summary: raw.summary,
-    decisions: raw.decisions,
-    actionItems: raw.action_items.map((a) => ({
+    title: text(raw.title) || meeting.title || "Meeting notes",
+    summary: text(raw.summary),
+    decisions: list(raw.decisions).filter((d) => typeof d === "string"),
+    actionItems: list(raw.action_items)
+      .filter((a) => a && text(a.title))
+      .map((a) => ({
       title: a.title,
-      owner: a.owner,
-      mine: a.mine,
+      owner: a.owner ?? null,
+      mine: !!a.mine,
       due: isDate(a.due) ? a.due : null,
       duration: Math.min(480, Math.max(10, Math.round(a.duration_minutes / 5) * 5 || 30)),
       priority: a.priority in PRIORITIES ? a.priority : "medium",
       type: a.type in taskTypes() ? a.type : "admin",
     })),
-    events: raw.events
-      .filter((e) => isDate(e.date))
+    events: list(raw.events)
+      .filter((e) => e && isDate(e.date) && text(e.title))
       .map((e) => ({
         title: e.title,
         date: e.date,
         start: isTime(e.start) ? e.start : null,
         end: isTime(e.end) ? e.end : isTime(e.start) ? fromMinutes(toMinutes(e.start!) + 30) : null,
-        location: e.location,
-        notes: e.notes,
+        location: e.location ?? null,
+        notes: e.notes ?? null,
       })),
-    questions: raw.open_questions,
+    questions: list(raw.open_questions).filter((q) => typeof q === "string"),
     generatedAt: Date.now(),
   };
 }
@@ -316,20 +321,31 @@ async function condense(meeting: Meeting, onStep?: (step: string) => void) {
   const pieces = inPieces(lines, (l) => l, room);
   let done = 0;
   onStep?.(`reading ${pieces.length} parts`);
+  /** Notes for some lines; when the notes don't fit in one answer, the lines go in two halves instead. */
+  const notesFor = async (lines: string[], label: string, depth = 0): Promise<string> => {
+    try {
+      const { notes: part } = await withRetry(() =>
+        askJson<{ notes: string }>({
+          name: "meeting_part",
+          system: CONDENSE_SYSTEM,
+          user: `${label} of the transcript:\n${lines.join("\n")}`,
+          schema: CONDENSE_SCHEMA,
+          effort: "low",
+          maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
+        }),
+      );
+      return part.trim();
+    } catch (e) {
+      if (!(e instanceof AiTooLong) || depth >= 3 || lines.length < 4) throw e;
+      const half = Math.ceil(lines.length / 2);
+      return `${await notesFor(lines.slice(0, half), `${label} (first half)`, depth + 1)}\n${await notesFor(lines.slice(half), `${label} (second half)`, depth + 1)}`;
+    }
+  };
   const notes = await inParallel(pieces, atOnce(), async (piece, n) => {
-    const { notes: part } = await withRetry(() =>
-      askJson<{ notes: string }>({
-        name: "meeting_part",
-        system: CONDENSE_SYSTEM,
-        user: `Part ${n + 1} of ${pieces.length} of the transcript:\n${piece.join("\n")}`,
-        schema: CONDENSE_SCHEMA,
-        effort: "low",
-        maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
-      }),
-    );
+    const part = await notesFor(piece, `Part ${n + 1} of ${pieces.length}`);
     done++;
     onStep?.(`read ${done} of ${pieces.length} parts`);
-    return `Part ${n + 1}:\n${part.trim()}`;
+    return `Part ${n + 1}:\n${part}`;
   });
   onStep?.("writing the notes");
   return notes.join("\n\n");
