@@ -1,5 +1,5 @@
 import { addDays, format } from "date-fns";
-import { AiError, AiTimeout, AiTooLong, askJson, estimateTokens, inPieces, tokenBudget, worthRetrying } from "@/lib/ai";
+import { AiError, AiTimeout, AiTooBig, AiTooLong, askJson, estimateTokens, inPieces, tokenBudget, worthRetrying } from "@/lib/ai";
 import { dayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
 import { expandEvents, fromMinutes, PRIORITIES, taskTypes, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
@@ -134,8 +134,28 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
   // Room for the answer, thinking included: about 5,000 tokens on a small Groq plan, 32,000 elsewhere.
   const answerRoom = roomy() ? 32_000 : Math.min(16000, Math.max(2500, Math.round(tokenBudget() * 0.35)));
   const fits = size <= ONE_PASS_TOKENS && estimateTokens(SYSTEM + intro + transcript) + answerRoom + 600 <= tokenBudget();
-  const condensed = async () =>
-    `The transcript was too long to read at once, so it was condensed part by part. Condensed notes, in order:\n\n${await condense(meeting, onStep)}`;
+  // The condensed notes must fit beside everything else in the final request (on a small Groq plan, 8,000 tokens in all).
+  const notesRoom = Math.min(
+    ONE_PASS_TOKENS,
+    Math.floor((tokenBudget() - estimateTokens(SYSTEM + intro + JSON.stringify(schema())) - answerRoom - 700) * 0.8),
+  );
+  const condensedIntro = "The transcript was too long to read at once, so it was condensed part by part. Condensed notes, in order:\n\n";
+  /** Reads the condensed notes; if the service still finds them too big (it counts words its own way), shortens them further. */
+  const fromNotes = async () => {
+    let target = Math.max(800, notesRoom);
+    let parts = await condense(transcriptText(meeting.segments).split("\n"), "transcript", target, onStep);
+    for (let tries = 0; ; tries++) {
+      try {
+        return await ask(condensedIntro + parts.join("\n\n"));
+      } catch (e) {
+        if (!(e instanceof AiTooBig) || tries >= 2) throw e;
+        // Make it as much shorter as the service says it's over, and a little more.
+        const over = e.reading - (e.limit - answerRoom - 300);
+        target = Math.max(500, Math.floor((estimateTokens(parts.join("\n\n")) - over * 1.2) * 0.9));
+        parts = await condense(parts, "notes", target, onStep);
+      }
+    }
+  };
 
   type Raw = {
     title: string;
@@ -154,21 +174,23 @@ export async function analyze(meeting: Meeting, onStep?: (step: string) => void)
       // A long meeting read whole thinks a little less, so the answer comes in time.
       effort: long ? "medium" : "high",
       maxTokens: answerRoom,
+      // Less than this and the notes won't fit; better to send shorter condensed notes.
+      minAnswer: Math.round(answerRoom * 0.8),
       // More to read takes longer: 4 minutes, plus about 2 more per hour of meeting, at most 10.
       timeoutMs: Math.min(600_000, 240_000 + size * 10),
     });
 
   let raw: Raw;
   if (!transcript) raw = await ask("Transcript: (no transcript — work from the notes)");
-  else if (!fits) raw = await ask(await condensed());
+  else if (!fits) raw = await fromNotes();
   else {
     try {
       raw = await withRetry(() => ask(`Transcript:\n${transcript}`, { long: size > 12_000 }));
     } catch (e) {
       // Too slow, or too long for one answer: read it part by part instead.
-      if (!(e instanceof AiTimeout || e instanceof AiTooLong) || size < 3_000) throw e;
+      if (!(e instanceof AiTimeout || e instanceof AiTooLong || e instanceof AiTooBig) || size < 3_000) throw e;
       onStep?.("reading it in parts instead");
-      raw = await ask(await condensed());
+      raw = await fromNotes();
     }
   }
 
@@ -314,41 +336,55 @@ const CONDENSE_SYSTEM = `You condense one part of a long meeting transcript into
 - Keep the speaker labels ("You" is the recorder, "Them" the others) and the order things happened in.
 - Drop small talk and repetition. Write in the language of the meeting. Never add anything that wasn't said.`;
 
-/** A transcript too long to read at once, as notes condensed piece by piece, in order. */
-async function condense(meeting: Meeting, onStep?: (step: string) => void) {
-  const lines = transcriptText(meeting.segments).split("\n");
+/**
+ * A transcript too long to read at once, as notes condensed piece by piece, in order, in about `target` tokens
+ * all told. Each part gets its share of that; if the notes still come out too long (a very long meeting on a small
+ * plan), the notes themselves are condensed again.
+ */
+async function condense(blocks: string[], kind: "transcript" | "notes", target: number, onStep?: (step: string) => void) {
   const room = Math.min(CONDENSE_PART_TOKENS, Math.max(1000, Math.floor((tokenBudget() - estimateTokens(CONDENSE_SYSTEM) - 1500) * 0.6)));
-  const pieces = inPieces(lines, (l) => l, room);
-  let done = 0;
-  onStep?.(`reading ${pieces.length} parts`);
-  /** Notes for some lines; when the notes don't fit in one answer, the lines go in two halves instead. */
-  const notesFor = async (lines: string[], label: string, depth = 0): Promise<string> => {
-    try {
-      const { notes: part } = await withRetry(() =>
-        askJson<{ notes: string }>({
-          name: "meeting_part",
-          system: CONDENSE_SYSTEM,
-          user: `${label} of the transcript:\n${lines.join("\n")}`,
-          schema: CONDENSE_SCHEMA,
-          effort: "low",
-          maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
-        }),
-      );
-      return part.trim();
-    } catch (e) {
-      if (!(e instanceof AiTooLong) || depth >= 3 || lines.length < 4) throw e;
-      const half = Math.ceil(lines.length / 2);
-      return `${await notesFor(lines.slice(0, half), `${label} (first half)`, depth + 1)}\n${await notesFor(lines.slice(half), `${label} (second half)`, depth + 1)}`;
+  for (let round = kind === "notes" ? 1 : 0; ; round++) {
+    const pieces = inPieces(blocks, (l) => l, room);
+    // Each part's share, in words (a word is a token or two, more in French than in English).
+    const share = Math.max(250, Math.floor(target / pieces.length));
+    const words = Math.max(120, Math.round(share * 0.55));
+    const what = round ? "notes" : "transcript";
+    let done = 0;
+    onStep?.(round ? `shortening the notes (${pieces.length} parts)` : `reading ${pieces.length} parts`);
+    /** Notes for some lines; when the notes don't fit in one answer, the lines go in two halves instead. */
+    const notesFor = async (lines: string[], label: string, limit: number, depth = 0): Promise<string> => {
+      try {
+        const { notes: part } = await withRetry(() =>
+          askJson<{ notes: string }>({
+            name: "meeting_part",
+            system: CONDENSE_SYSTEM,
+            user: `${label} of the ${what}. Keep your notes under ${limit} words.\n\n${lines.join("\n")}`,
+            schema: CONDENSE_SCHEMA,
+            effort: "low",
+            maxTokens: Math.max(1000, Math.round(room * 0.5)) + (roomy() ? 4000 : 0),
+          }),
+        );
+        return part.trim();
+      } catch (e) {
+        if (!(e instanceof AiTooLong) || depth >= 3 || lines.length < 4) throw e;
+        const half = Math.ceil(lines.length / 2);
+        const each = Math.max(80, Math.round(limit / 2));
+        return `${await notesFor(lines.slice(0, half), `${label} (first half)`, each, depth + 1)}\n${await notesFor(lines.slice(half), `${label} (second half)`, each, depth + 1)}`;
+      }
+    };
+    const notes = await inParallel(pieces, atOnce(), async (piece, n) => {
+      const part = await notesFor(piece, `Part ${n + 1} of ${pieces.length}`, words);
+      done++;
+      onStep?.(round ? `shortened ${done} of ${pieces.length}` : `read ${done} of ${pieces.length} parts`);
+      return `Part ${n + 1}:\n${part}`;
+    });
+    // Short enough to read in one go, or as short as it will get.
+    if (estimateTokens(notes.join("\n\n")) <= target || round >= 3 || notes.length < 2) {
+      onStep?.("writing the notes");
+      return notes;
     }
-  };
-  const notes = await inParallel(pieces, atOnce(), async (piece, n) => {
-    const part = await notesFor(piece, `Part ${n + 1} of ${pieces.length}`);
-    done++;
-    onStep?.(`read ${done} of ${pieces.length} parts`);
-    return `Part ${n + 1}:\n${part}`;
-  });
-  onStep?.("writing the notes");
-  return notes.join("\n\n");
+    blocks = notes;
+  }
 }
 
 const LANGUAGE_NAMES: Record<string, string> = {

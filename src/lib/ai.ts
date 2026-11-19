@@ -124,6 +124,18 @@ export class AiTooLong extends AiError {
   }
 }
 
+/** What was sent is more than the service takes in one request (Groq's per-minute allowance). */
+export class AiTooBig extends AiError {
+  constructor(
+    message: string,
+    /** Tokens the request took to read, by the service's own count */
+    public reading: number,
+    public limit: number,
+  ) {
+    super(message);
+  }
+}
+
 /** The request was stopped on purpose (it isn't a failure to report). */
 export class AiStopped extends AiError {
   constructor() {
@@ -153,7 +165,7 @@ class ServiceError extends AiError {
  * and unreadable answers are worth another go.
  */
 export function worthRetrying(error: unknown) {
-  if (error instanceof AiStopped || error instanceof AiTooLong) return false;
+  if (error instanceof AiStopped || error instanceof AiTooLong || error instanceof AiTooBig) return false;
   if (error instanceof ServiceError) return error.status === 429 || error.status >= 500;
   if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError || error instanceof Anthropic.NotFoundError || error instanceof Anthropic.BadRequestError) return false;
   if (error instanceof AiError && /API key|declined/i.test(error.message)) return false;
@@ -257,6 +269,8 @@ export type JsonRequest = {
   /** How hard to think: low for sorting and summaries, higher for reading a whole meeting */
   effort?: "low" | "medium" | "high";
   maxTokens?: number;
+  /** The least room the answer needs: when what's sent leaves less (Groq's small plans), it's too big to send */
+  minAnswer?: number;
   /** Lets the caller stop the request (a Stop button) */
   signal?: AbortSignal;
   /** Give up after this long; default 3 minutes */
@@ -419,9 +433,11 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
       learnGroqLimit(tpm.limit);
       reading = Math.max(0, tpm.requested - max);
       const room = tpm.limit - reading - 256;
-      if (room < 1000)
-        throw new AiError(
+      if (room < Math.max(1000, Math.min(wanted, req.minAnswer ?? 0)))
+        throw new AiTooBig(
           `This is more than your Groq plan allows in a minute (${tpm.limit.toLocaleString()} tokens; reading this alone takes about ${reading.toLocaleString()}). Try a shorter request, Groq's paid tier, or another AI service in Settings.`,
+          reading,
+          tpm.limit,
         );
       max = Math.min(wanted, room);
       effort = thinking();
