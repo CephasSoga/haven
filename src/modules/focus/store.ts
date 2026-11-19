@@ -35,6 +35,8 @@ export type Active = {
   planned: number;
   /** Break after it, in minutes (0 = none) */
   breakMin: number;
+  /** It's the long break of the cycle */
+  longBreak?: boolean;
   startedAt: number;
   /** Milliseconds focused before the current stretch (pauses split stretches) */
   banked: number;
@@ -43,10 +45,29 @@ export type Active = {
   thoughts: string[];
 };
 
+/** How you like to set sessions up (remembered for next time). */
+export type FocusPrefs = {
+  /** "25" | "50" | "90" | "custom" */
+  length: string;
+  customLength: number;
+  /** "0" | "5" | "10" | "15" | "custom" */
+  brk: string;
+  customBreak: number;
+  /** A longer break after every nth session of the day (0 = never) */
+  longEvery: number;
+  longMin: number;
+};
+
+export const DEFAULT_PREFS: FocusPrefs = { length: "50", customLength: 40, brk: "10", customBreak: 20, longEvery: 0, longMin: 20 };
+
 type FocusState = {
   active: Active | null;
   /** The break after a session ends at… */
   breakUntil: number | null;
+  /** …and it's the long one */
+  breakLong?: boolean;
+  prefs: FocusPrefs;
+  setPrefs: (p: Partial<FocusPrefs>) => void;
   /** The session waiting for "how did it go?" */
   review: string | null;
   sessions: Session[];
@@ -54,7 +75,7 @@ type FocusState = {
   goal: number;
   /** Quiet reminders: money and release reminders that fall in this window wait until it's over */
   quiet: { from: number; until: number | null } | null;
-  start: (s: Pick<Active, "intention" | "taskId" | "planned" | "breakMin">) => void;
+  start: (s: Pick<Active, "intention" | "taskId" | "planned" | "breakMin" | "longBreak">) => void;
   pause: () => void;
   resume: () => void;
   extend: (minutes: number) => void;
@@ -81,10 +102,12 @@ export const useFocus = create<FocusState>()(
       sessions: [],
       goal: 180,
       quiet: null,
-      start: ({ intention, taskId, planned, breakMin }) => {
+      prefs: DEFAULT_PREFS,
+      setPrefs: (p) => set((s) => ({ prefs: { ...DEFAULT_PREFS, ...s.prefs, ...p } })),
+      start: ({ intention, taskId, planned, breakMin, longBreak }) => {
         const now = Date.now();
         set({
-          active: { id: uid(), intention: intention.trim(), taskId, planned, breakMin, startedAt: now, banked: 0, runningSince: now, thoughts: [] },
+          active: { id: uid(), intention: intention.trim(), taskId, planned, breakMin, longBreak, startedAt: now, banked: 0, runningSince: now, thoughts: [] },
           breakUntil: null,
           review: null,
           quiet: { from: now, until: null },
@@ -121,6 +144,7 @@ export const useFocus = create<FocusState>()(
           sessions: [session, ...s.sessions.filter((x) => x.id !== a.id)],
           review: a.id,
           breakUntil: a.breakMin && focused >= 1 ? now + a.breakMin * 60_000 : null,
+          breakLong: !!a.longBreak,
           quiet,
         }));
       },
@@ -153,6 +177,9 @@ export function heldByFocus(key: string, at: number, now: number) {
 }
 
 /* ---------- Numbers ---------- */
+
+/** Sessions done today (that counted). */
+export const todaysCount = (sessions: Session[], now = new Date()) => sessions.filter((s) => s.focused >= 1 && dayKey(new Date(s.start)) === dayKey(now)).length;
 
 export function minutesByDay(sessions: Session[]) {
   const by = new Map<string, number>();

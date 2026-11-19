@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { format, formatDistanceToNowStrict, isToday } from "date-fns";
-import { Check, CirclePlus, Coffee, ListPlus, Pause, Play, Plus, Square, Trash2, Volume2, X } from "lucide-react";
+import { Check, CirclePlus, Coffee, ListPlus, Pause, Play, Plus, Square, Trash2, X } from "lucide-react";
 import { Button, Card, CardHeader, Field, Input, PageHeader, Progress, Segmented, Select } from "@/components/ui";
 import { ask } from "@/components/confirm";
 import { cn } from "@/lib/utils";
 import { dayKey } from "@/lib/dates";
 import { onAndroid } from "@/lib/platform";
 import { expandEvents, formatTime, PRIORITIES, toMinutes, useCalendar } from "@/modules/calendar/store";
-import { NOISES, useFocusSound, type Noise } from "./sound";
-import { clock, focusedMs, hours, lastWeek, OUTCOMES, remainingMs, streak, useFocus, type Outcome, type Session } from "./store";
+import { SoundMixer } from "./SoundMixer";
+import { clock, DEFAULT_PREFS, focusedMs, hours, lastWeek, OUTCOMES, remainingMs, streak, todaysCount, useFocus, type Outcome, type Session } from "./store";
 
 const ACCENT = "#e0803a";
 
@@ -16,6 +16,7 @@ export function FocusPage() {
   const active = useFocus((s) => s.active);
   const review = useFocus((s) => s.review);
   const breakUntil = useFocus((s) => s.breakUntil);
+  const breakLong = useFocus((s) => !!s.breakLong);
   const reviewed = useFocus((s) => s.sessions.find((x) => x.id === review));
 
   return (
@@ -27,7 +28,7 @@ export function FocusPage() {
             <Running />
           ) : (
             <>
-              {breakUntil && <BreakCard until={breakUntil} />}
+              {breakUntil && <BreakCard until={breakUntil} long={breakLong} />}
               {reviewed ? <Review session={reviewed} /> : <Setup />}
             </>
           )}
@@ -57,21 +58,37 @@ function useTick(on: boolean) {
 
 const LENGTHS = ["25", "50", "90", "custom"] as const;
 type Length = (typeof LENGTHS)[number];
+const BREAKS = ["0", "5", "10", "15", "custom"] as const;
+type Break = (typeof BREAKS)[number];
+const EVERY = [0, 2, 3, 4, 5, 6];
+const nth = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th"}`;
+const minutes = (v: string, min: number, max: number) => Math.max(min, Math.min(max, Math.round(Number(v)) || min));
 
 function Setup() {
   const tasks = useCalendar((s) => s.tasks);
   const events = useCalendar((s) => s.events);
   const start = useFocus((s) => s.start);
+  const sessions = useFocus((s) => s.sessions);
+  const saved = useFocus((s) => s.prefs);
+  const prefs = { ...DEFAULT_PREFS, ...saved };
+  const setPrefs = useFocus((s) => s.setPrefs);
   const [intention, setIntention] = useState("");
   const [taskId, setTaskId] = useState("");
-  const [length, setLength] = useState<Length>("50");
-  const [custom, setCustom] = useState("40");
-  const [breakMin, setBreakMin] = useState("10");
+  const [length, setLength] = useState<Length>((LENGTHS as readonly string[]).includes(prefs.length) ? (prefs.length as Length) : "50");
+  const [custom, setCustom] = useState(String(prefs.customLength));
+  const [brk, setBrk] = useState<Break>((BREAKS as readonly string[]).includes(prefs.brk) ? (prefs.brk as Break) : "10");
+  const [customBreak, setCustomBreak] = useState(String(prefs.customBreak));
+  const [longMin, setLongMin] = useState(String(prefs.longMin));
   const [cap, setCap] = useState<number | null>(null);
 
   const open = useMemo(() => tasks.filter((t) => !t.done).sort((a, b) => PRIORITIES[a.priority].rank - PRIORITIES[b.priority].rank || a.title.localeCompare(b.title)), [tasks]);
-  const chosen = length === "custom" ? Math.max(5, Math.min(240, Number(custom) || 0)) : Number(length);
+  const chosen = length === "custom" ? minutes(custom, 5, 240) : Number(length);
   const planned = cap ?? chosen;
+  const shortBreak = brk === "custom" ? minutes(customBreak, 1, 60) : Number(brk);
+  // Every nth session of the day ends with the long break instead.
+  const number = todaysCount(sessions) + 1;
+  const long = prefs.longEvery > 0 && number % prefs.longEvery === 0;
+  const breakMin = long ? minutes(longMin, 5, 90) : shortBreak;
 
   // Something on the calendar before the session would end?
   const clash = useMemo(() => {
@@ -83,7 +100,10 @@ function Setup() {
   }, [events, chosen]);
   useEffect(() => setCap(null), [chosen]);
 
-  const go = () => start({ intention: intention || open.find((t) => t.id === taskId)?.title || "", taskId: taskId || undefined, planned, breakMin: Number(breakMin) });
+  const go = () => {
+    setPrefs({ length, customLength: minutes(custom, 5, 240), brk, customBreak: minutes(customBreak, 1, 60), longMin: minutes(longMin, 5, 90) });
+    start({ intention: intention || open.find((t) => t.id === taskId)?.title || "", taskId: taskId || undefined, planned, breakMin, longBreak: long });
+  };
 
   return (
     <Card>
@@ -118,7 +138,7 @@ function Setup() {
         <div className="flex flex-wrap gap-5">
           <div className="flex flex-col gap-1.5">
             <span className="text-[13px] font-medium text-muted">Length</span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Segmented<Length>
                 layoutId="focus-length"
                 value={length}
@@ -132,13 +152,45 @@ function Setup() {
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-[13px] font-medium text-muted">Break after</span>
-            <Segmented
-              layoutId="focus-break"
-              value={breakMin}
-              onChange={setBreakMin}
-              options={["0", "5", "10", "15"].map((b) => ({ value: b, label: <span className="whitespace-nowrap">{b === "0" ? "None" : `${b} min`}</span> }))}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Segmented<Break>
+                layoutId="focus-break"
+                value={brk}
+                onChange={setBrk}
+                options={BREAKS.map((b) => ({ value: b, label: <span className="whitespace-nowrap">{b === "0" ? "None" : b === "custom" ? "Other" : <>{b}<span className="hidden sm:inline"> min</span></>}</span> }))}
+              />
+              {brk === "custom" && (
+                <Input type="number" min={1} max={60} value={customBreak} onChange={(e) => setCustomBreak(e.target.value)} className="h-10 w-20" aria-label="Break minutes" />
+              )}
+            </div>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-[13px]">
+          <span className="text-muted">Longer break</span>
+          <Select value={prefs.longEvery} onChange={(e) => setPrefs({ longEvery: Number(e.target.value) })} className="h-8 w-auto text-[13px]" aria-label="Longer break how often">
+            {EVERY.map((n) => (
+              <option key={n} value={n}>
+                {n ? `after every ${nth(n)} session` : "never"}
+              </option>
+            ))}
+          </Select>
+          {prefs.longEvery > 0 && (
+            <>
+              <Input
+                type="number"
+                min={5}
+                max={90}
+                value={longMin}
+                onChange={(e) => setLongMin(e.target.value)}
+                onBlur={() => setPrefs({ longMin: minutes(longMin, 5, 90) })}
+                className="h-8 w-16 text-[13px]"
+                aria-label="Longer break minutes"
+              />
+              <span className="text-muted">min</span>
+            </>
+          )}
+          {long && <span className="rounded-full bg-sunken px-2.5 py-1 text-[12px] font-medium">Your {nth(number)} session today: a {breakMin} min break follows</span>}
         </div>
 
         {clash && (
@@ -157,7 +209,7 @@ function Setup() {
           </div>
         )}
 
-        <SoundPicker />
+        <SoundMixer canPreview />
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
           <p className="max-w-sm text-[13px] text-muted">
@@ -217,6 +269,12 @@ function Running() {
         <div className="max-w-md text-center">
           {a.intention ? <p className="font-serif text-2xl leading-snug">{a.intention}</p> : <p className="text-muted">Focusing</p>}
           {task && task.title !== a.intention && <p className="mt-1 text-[13px] text-muted">For “{task.title}”</p>}
+          {a.breakMin > 0 && (
+            <p className="mt-1 text-[12px] text-faint">
+              Then a {a.longBreak ? "long " : ""}
+              {a.breakMin} min break
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-2">
@@ -270,45 +328,27 @@ function Running() {
       </div>
 
       <div className="border-t border-line px-6 py-5">
-        <SoundPicker />
+        <SoundMixer />
       </div>
     </Card>
   );
 }
 
-function SoundPicker() {
-  const { noise, volume, set } = useFocusSound();
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <Volume2 className="size-4 text-muted" />
-      <Segmented<Noise> layoutId="focus-noise" value={noise} onChange={(n) => set({ noise: n })} options={NOISES} />
-      {noise !== "off" && (
-        <input
-          type="range"
-          min={0.05}
-          max={1}
-          step={0.05}
-          value={volume}
-          onChange={(e) => set({ volume: Number(e.target.value) })}
-          aria-label="Volume"
-          className="w-28 accent-[#e0803a]"
-        />
-      )}
-    </div>
-  );
-}
-
 /* ---------- After ---------- */
 
-function BreakCard({ until }: { until: number }) {
+function BreakCard({ until, long }: { until: number; long: boolean }) {
   useTick(true);
   return (
     <Card className="flex items-center justify-between gap-4 px-6 py-4">
       <div className="flex items-center gap-3">
         <Coffee className="size-5 text-pos" />
         <div>
-          <div className="font-medium">Break · {clock(Math.max(0, until - Date.now()))}</div>
-          <div className="text-[13px] text-muted">Stand up, look away from the screen, drink some water.</div>
+          <div className="font-medium">
+            {long ? "Long break" : "Break"} · {clock(Math.max(0, until - Date.now()))}
+          </div>
+          <div className="text-[13px] text-muted">
+            {long ? "Well earned. Get away from the screen: a walk, some food, fresh air." : "Stand up, look away from the screen, drink some water."}
+          </div>
         </div>
       </div>
       <Button size="sm" variant="ghost" onClick={() => useFocus.getState().endBreak()}>
