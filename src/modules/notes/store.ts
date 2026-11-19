@@ -8,23 +8,40 @@ export type Note = {
   body: string;
   color: string;
   pinned: boolean;
+  /** The group it's filed in; none = ungrouped */
+  groupId?: string;
   /** epoch ms */
   createdAt: number;
   updatedAt: number;
 };
 
+/** A group of notes. Haven makes some itself — one per book you take notes in, one per podcast. */
+export type NoteGroup = {
+  id: string;
+  name: string;
+  /** What Haven made it for, so it finds it again (and shows the right icon) */
+  source?: { kind: "book" | "podcast"; id: string };
+  createdAt: number;
+};
+
 type NotesState = {
   notes: Note[];
+  groups: NoteGroup[];
   create: (patch?: Partial<Note>) => string;
   update: (id: string, patch: Partial<Omit<Note, "id" | "createdAt">>) => void;
   remove: (id: string) => void;
-  replaceAll: (notes: Note[]) => void;
+  replaceAll: (notes: Note[], groups?: NoteGroup[]) => void;
+  addGroup: (name: string, source?: NoteGroup["source"]) => string;
+  renameGroup: (id: string, name: string) => void;
+  /** The group goes; its notes stay, ungrouped */
+  removeGroup: (id: string) => void;
 };
 
 export const useNotes = create<NotesState>()(
   persist(
     (set) => ({
       notes: [],
+      groups: [],
       create: (patch) => {
         const now = Date.now();
         const note: Note = { id: uid(), title: "", body: "", color: "amber", pinned: false, createdAt: now, updatedAt: now, ...patch };
@@ -34,16 +51,24 @@ export const useNotes = create<NotesState>()(
       update: (id, patch) =>
         set((s) => ({ notes: s.notes.map((n) => (n.id === id ? { ...n, ...patch, updatedAt: Date.now() } : n)) })),
       remove: (id) => set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })),
-      replaceAll: (notes) => set({ notes }),
+      replaceAll: (notes, groups) => set((s) => ({ notes, groups: groups ?? s.groups })),
+      addGroup: (name, source) => {
+        const group: NoteGroup = { id: uid(), name: name.trim() || "Untitled group", source, createdAt: Date.now() };
+        set((s) => ({ groups: [...s.groups, group] }));
+        return group.id;
+      },
+      renameGroup: (id, name) => set((s) => ({ groups: s.groups.map((g) => (g.id === id ? { ...g, name: name.trim() || g.name } : g)) })),
+      removeGroup: (id) =>
+        set((s) => ({ groups: s.groups.filter((g) => g.id !== id), notes: s.notes.map((n) => (n.groupId === id ? { ...n, groupId: undefined } : n)) })),
     }),
     {
       name: "haven:notes",
-      version: 3,
+      version: 4,
       migrate: (persisted, version) => {
-        const s = persisted as { notes?: Note[]; pages?: PageV2[] };
+        const s = persisted as { notes?: Note[]; pages?: PageV2[]; groups?: NoteGroup[] };
         // Version 2 stored nested, block-based pages; bring them back as plain notes.
-        if (version === 2) return { notes: fromPages(s.pages ?? []) };
-        return { notes: s.notes ?? [] };
+        if (version === 2) return { notes: fromPages(s.pages ?? []), groups: [] };
+        return { notes: s.notes ?? [], groups: s.groups ?? [] };
       },
     },
   ),
@@ -95,6 +120,12 @@ export function fromPages(pages: PageV2[]): Note[] {
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
     }));
+}
+
+/** The group Haven keeps for a book or podcast, made (or remade, if you deleted it) when needed. */
+export function groupFor(source: NonNullable<NoteGroup["source"]>, name: string) {
+  const { groups, addGroup } = useNotes.getState();
+  return groups.find((g) => g.source?.kind === source.kind && g.source.id === source.id)?.id ?? addGroup(name, source);
 }
 
 export function isBlank(n: Note) {

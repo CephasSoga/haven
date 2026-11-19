@@ -9,12 +9,13 @@ import type { Plugin } from "vite";
  * the feed from your machine and hands back the XML.
  *
  * Guard rails: only http(s), never local/private network addresses, only feed-like responses
- * (XML/RSS/Atom) up to 5 MB, and a custom header that cross-site pages can't send, so other
+ * (XML/RSS/Atom) up to 30 MB, and a custom header that cross-site pages can't send, so other
  * websites you visit can't use it.
  */
 
 const PRIVATE_HOST = /^(localhost|0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:|\[?fe80:)/i;
-const MAX_BYTES = 5 * 1024 * 1024;
+// Podcast feeds with years of episodes run to tens of megabytes.
+const MAX_BYTES = 30 * 1024 * 1024;
 
 async function handle(req: IncomingMessage, res: ServerResponse, next: () => void) {
   if (!req.url?.startsWith("/api/feed")) return next();

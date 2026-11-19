@@ -89,6 +89,8 @@ async function describeEpub(file: File, base: Book): Promise<Book> {
     }
     return { ...base, title: meta.title?.trim() || base.title, author: meta.creator?.trim() || undefined, cover };
   } finally {
+    // Closing it while epub.js is still opening it makes epub.js throw (and Haven say "Something went wrong").
+    await Promise.race([book.opened, new Promise((r) => setTimeout(r, 5000))]).catch(() => {});
     book.destroy();
   }
 }

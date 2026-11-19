@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { deleteFile } from "./files";
+import { useAnnotations } from "./annotations";
 
 export type BookStatus = "to-read" | "reading" | "finished";
 
@@ -63,6 +64,8 @@ export const useLibrary = create<LibraryState>()(
       remove: async (id) => {
         await deleteFile(id);
         set((s) => ({ books: s.books.filter((b) => b.id !== id) }));
+        // Its highlights go with it; its page in Notes stays.
+        useAnnotations.getState().removeBook(id);
       },
       replaceAll: (books) => set({ books }),
     }),

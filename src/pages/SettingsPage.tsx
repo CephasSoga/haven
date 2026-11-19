@@ -16,6 +16,8 @@ import { useSubscriptions } from "@/modules/subscriptions/store";
 import { useReleases } from "@/modules/releases/store";
 import { readDecisionsFile, useDecisions } from "@/modules/decisions/store";
 import { useFocus } from "@/modules/focus/store";
+import { useAnnotations } from "@/modules/library/annotations";
+import { usePodcasts } from "@/modules/podcasts/store";
 import { AI_PROVIDERS, explain, testConnection, useAi, type AiProvider } from "@/lib/ai";
 import { AuthProblem, changePassword, cloudEnabled, endSession, useAuth } from "@/lib/cloud";
 import { signOutAndClear, syncNow, useSync } from "@/lib/sync";
@@ -77,7 +79,7 @@ export function SettingsPage() {
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
       calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
       finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions, rules: finance.rules, bills: finance.bills },
-      notes: { notes: notes.notes },
+      notes: { notes: notes.notes, groups: notes.groups },
       // Already encrypted — the backup never contains vault contents in the clear.
       vault: readVaultFile(),
       // Encrypted too, with the Decisions password.
@@ -89,6 +91,8 @@ export function SettingsPage() {
       subscriptions: { subs: subscriptions.subs, dismissed: subscriptions.dismissed },
       releases: (({ kinds, genres, follows, platforms }) => ({ kinds, genres, follows, platforms }))(useReleases.getState()),
       focus: (({ sessions, goal }) => ({ sessions, goal }))(useFocus.getState()),
+      annotations: { items: useAnnotations.getState().items },
+      podcasts: (({ shows, listens, queue, speed }) => ({ shows, listens, queue, speed }))(usePodcasts.getState()),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -114,7 +118,7 @@ export function SettingsPage() {
         bills: data.finances?.bills ?? [],
       });
       // Backups made while Notes used block pages hold `pages`; convert them back to notes.
-      notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []));
+      notes.replaceAll(data.notes?.notes ?? fromPages(data.notes?.pages ?? []), data.notes?.groups ?? []);
       if (data.vault?.app === "haven-vault") vault.restore(data.vault);
       if (data.decisions?.app === "haven-decisions") void useDecisions.getState().restore(data.decisions);
       if (data.library?.books) library.replaceAll(data.library.books);
@@ -122,6 +126,8 @@ export function SettingsPage() {
       if (data.meetings?.meetings) meetings.replaceAll(data.meetings.meetings);
       if (data.subscriptions?.subs) useSubscriptions.setState({ subs: data.subscriptions.subs, dismissed: data.subscriptions.dismissed ?? [] });
       if (data.releases?.genres) useReleases.setState({ kinds: data.releases.kinds, genres: data.releases.genres, follows: data.releases.follows ?? {}, platforms: data.releases.platforms ?? null });
+      if (data.podcasts?.shows) usePodcasts.setState({ shows: data.podcasts.shows, listens: data.podcasts.listens ?? {}, queue: data.podcasts.queue ?? [], speed: data.podcasts.speed ?? 1 });
+      if (data.annotations?.items) useAnnotations.setState({ items: data.annotations.items });
       if (data.focus?.sessions) useFocus.setState({ sessions: data.focus.sessions, goal: data.focus.goal ?? 180 });
       flash("Backup restored.");
     } catch (e) {
@@ -226,7 +232,7 @@ export function SettingsPage() {
             onClick={async () => {
               if (!(await ask({ title: "Erase everything?", body: "All of your Haven data will be deleted from this browser, including your vault and library. Export a backup first if you might want it back.", confirmLabel: "Erase everything", danger: true }))) return;
               calendar.replaceAll({ events: [], tasks: [] });
-              notes.replaceAll([]);
+              notes.replaceAll([], []);
               vault.restore(null);
               void useDecisions.getState().restore(null);
               library.replaceAll([]);
@@ -235,6 +241,8 @@ export function SettingsPage() {
               useReleases.setState({ genres: { movie: [], tv: [], music: [], game: [] }, follows: {} });
               useFeed.setState({ interests: [], editions: [], error: null });
               useFocus.setState({ active: null, breakUntil: null, review: null, sessions: [], quiet: null });
+              useAnnotations.setState({ items: [] });
+              usePodcasts.setState({ shows: [], listens: {}, queue: [] });
               clearFiles();
               finance.replaceAll({ accounts: DEFAULT_ACCOUNTS, categories: DEFAULT_CATEGORIES, transactions: [] });
               flash("All data erased.");

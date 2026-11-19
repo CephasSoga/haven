@@ -161,7 +161,8 @@ export function Shell({ children }: { children: ReactNode }) {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-          className="mx-auto max-w-[1280px] px-4 pb-32 pt-6 sm:px-8 md:pb-12 md:pt-10"
+          // The podcast player, when open, sits at the bottom: leave room for it (--player-space).
+          className="mx-auto max-w-[1280px] px-4 pb-[calc(8rem+var(--player-space,0px))] pt-6 sm:px-8 md:pb-[calc(3rem+var(--player-space,0px))] md:pt-10"
         >
           {children}
         </motion.div>

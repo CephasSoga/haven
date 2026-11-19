@@ -3,10 +3,10 @@ import { ask } from "@/components/confirm";
 import { useSearchParams } from "react-router";
 import { format, formatDistanceToNowStrict, isThisYear, isToday, isYesterday } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, Hash, NotebookPen, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
+import { BookOpen, Check, ChevronLeft, Folder, FolderPlus, Hash, NotebookPen, Pencil, Pin, PinOff, Plus, Podcast, Search, Trash2, X } from "lucide-react";
 import { Button, Card, EmptyState, IconButton, Input, PageHeader } from "@/components/ui";
 import { cn, swatch, SWATCHES } from "@/lib/utils";
-import { compareNotes, isBlank, preview, tagsOf, useNotes, type Note } from "./store";
+import { compareNotes, isBlank, preview, tagsOf, useNotes, type Note, type NoteGroup } from "./store";
 
 function when(ms: number) {
   const d = new Date(ms);
@@ -20,18 +20,30 @@ function edited(ms: number) {
 }
 
 export function NotesPage() {
-  const { notes, create, update, remove } = useNotes();
+  const { notes, groups, create, update, remove } = useNotes();
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const selected = notes.find((n) => n.id === params.get("id")) ?? null;
+  // The group being looked at: a group's id, "none" for ungrouped notes, or nothing for all of them.
+  const groupParam = params.get("group");
+  const group = groups.find((g) => g.id === groupParam) ?? null;
+  const ungrouped = groupParam === "none";
 
+  const go = (next: { id?: string | null; group?: string | null }) => {
+    const p: Record<string, string> = {};
+    const g = next.group !== undefined ? next.group : groupParam;
+    const id = next.id !== undefined ? next.id : selected?.id;
+    if (g) p.group = g;
+    if (id) p.id = id;
+    setParams(p, { replace: true });
+  };
   const select = (id: string | null) => {
     // A note left completely empty isn't worth keeping.
     if (selected && selected.id !== id && isBlank(selected)) remove(selected.id);
-    setParams(id ? { id } : {}, { replace: true });
+    go({ id });
   };
-  const newNote = () => select(create(tag ? { body: `\n\n#${tag}` } : undefined));
+  const newNote = () => select(create({ ...(tag ? { body: `\n\n#${tag}` } : {}), ...(group ? { groupId: group.id } : {}) }));
 
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -42,9 +54,11 @@ export function NotesPage() {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return notes
+      .filter((n) => (group ? n.groupId === group.id : ungrouped ? !n.groupId || !groups.some((g) => g.id === n.groupId) : true))
       .filter((n) => (!tag || tagsOf(n).has(tag)) && (!q || `${n.title}\n${n.body}`.toLowerCase().includes(q)))
       .sort(compareNotes);
-  }, [notes, query, tag]);
+  }, [notes, query, tag, group, ungrouped, groups]);
+  const groupName = (id?: string) => groups.find((g) => g.id === id)?.name;
 
   const pinned = visible.filter((n) => n.pinned);
   const others = visible.filter((n) => !n.pinned);
@@ -78,6 +92,12 @@ export function NotesPage() {
               <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-faint" />
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search notes" className="h-10 pl-10" />
             </div>
+            <Groups
+              groups={groups}
+              notes={notes}
+              current={group?.id ?? (ungrouped ? "none" : null)}
+              onPick={(g) => go({ group: g, id: null })}
+            />
             {allTags.length > 0 && (
               <div className="-mx-1 flex flex-wrap gap-1.5">
                 {allTags.map(([t, count]) => (
@@ -116,11 +136,11 @@ export function NotesPage() {
               <>
                 {pinned.length > 0 && <ListLabel>Pinned</ListLabel>}
                 {pinned.map((n) => (
-                  <NoteItem key={n.id} note={n} active={n.id === selected?.id} onClick={() => select(n.id)} />
+                  <NoteItem key={n.id} note={n} group={group ? undefined : groupName(n.groupId)} active={n.id === selected?.id} onClick={() => select(n.id)} />
                 ))}
                 {pinned.length > 0 && others.length > 0 && <ListLabel>Others</ListLabel>}
                 {others.map((n) => (
-                  <NoteItem key={n.id} note={n} active={n.id === selected?.id} onClick={() => select(n.id)} />
+                  <NoteItem key={n.id} note={n} group={group ? undefined : groupName(n.groupId)} active={n.id === selected?.id} onClick={() => select(n.id)} />
                 ))}
               </>
             )}
@@ -140,12 +160,13 @@ export function NotesPage() {
               >
                 <NoteEditor
                   note={selected}
+                  groups={groups}
                   onChange={(patch) => update(selected.id, patch)}
                   onBack={() => select(null)}
                   onDelete={async () => {
                     if (isBlank(selected) || (await ask({ title: `Delete “${selected.title || "Untitled"}”?`, body: "This note will be deleted.", confirmLabel: "Delete", danger: true }))) {
                       remove(selected.id);
-                      setParams({}, { replace: true });
+                      go({ id: null });
                     }
                   }}
                 />
@@ -177,7 +198,7 @@ function ListLabel({ children }: { children: string }) {
   return <div className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">{children}</div>;
 }
 
-function NoteItem({ note, active, onClick }: { note: Note; active: boolean; onClick: () => void }) {
+function NoteItem({ note, group, active, onClick }: { note: Note; group?: string; active: boolean; onClick: () => void }) {
   const text = preview(note);
   return (
     <button
@@ -202,17 +223,114 @@ function NoteItem({ note, active, onClick }: { note: Note; active: boolean; onCl
         <span className="shrink-0 text-[12px] text-faint tabular">{when(note.updatedAt)}</span>
       </div>
       <p className="mt-1 line-clamp-2 pl-4 text-[13px] leading-snug text-muted">{text || "No additional text"}</p>
+      {group && (
+        <p className="mt-1 flex items-center gap-1 pl-4 text-[11px] text-faint">
+          <Folder className="size-3" /> <span className="truncate">{group}</span>
+        </p>
+      )}
     </button>
+  );
+}
+
+const groupIcon = (g: NoteGroup) => (g.source?.kind === "book" ? BookOpen : g.source?.kind === "podcast" ? Podcast : Folder);
+
+/** The groups, as a row of chips: pick one to see its notes, add one, rename or delete the one you're in. */
+function Groups({ groups, notes, current, onPick }: { groups: NoteGroup[]; notes: Note[]; current: string | null; onPick: (id: string | null) => void }) {
+  const { addGroup, renameGroup, removeGroup } = useNotes();
+  const [naming, setNaming] = useState<{ id: string | null; name: string } | null>(null);
+  const known = new Set(groups.map((g) => g.id));
+  const count = (id: string | null) => notes.filter((n) => (id ? n.groupId === id : !n.groupId || !known.has(n.groupId))).length;
+  const sorted = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+  const active = groups.find((g) => g.id === current);
+
+  const save = () => {
+    if (!naming) return;
+    if (naming.id) renameGroup(naming.id, naming.name);
+    else if (naming.name.trim()) onPick(addGroup(naming.name));
+    setNaming(null);
+  };
+
+  const chip = (id: string | null, label: string, Icon: typeof Folder | null, n: number) => (
+    <button
+      key={id ?? "all"}
+      onClick={() => onPick(id)}
+      className={cn(
+        "flex max-w-[14rem] shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors",
+        current === id ? "bg-primary text-on-primary" : "bg-sunken text-muted hover:text-ink",
+      )}
+    >
+      {Icon && <Icon className="size-3 shrink-0" />}
+      <span className="truncate">{label}</span>
+      <span className={cn("ml-0.5 tabular", current === id ? "opacity-60" : "text-faint")}>{n}</span>
+    </button>
+  );
+
+  if (naming)
+    return (
+      <form
+        className="flex items-center gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        <Input autoFocus value={naming.name} onChange={(e) => setNaming({ ...naming, name: e.target.value })} placeholder="Group name" className="h-9" onKeyDown={(e) => e.key === "Escape" && setNaming(null)} />
+        <IconButton label="Save" onClick={save}>
+          <Check className="size-4" />
+        </IconButton>
+        <IconButton label="Cancel" onClick={() => setNaming(null)}>
+          <X className="size-4" />
+        </IconButton>
+      </form>
+    );
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="-mx-1 flex flex-wrap items-center gap-1.5">
+        {chip(null, "All notes", null, notes.length)}
+        {sorted.map((g) => chip(g.id, g.name, groupIcon(g), count(g.id)))}
+        {groups.length > 0 && count(null) > 0 && chip("none", "No group", null, count(null))}
+        <button onClick={() => setNaming({ id: null, name: "" })} className="flex items-center gap-1 rounded-full px-2 py-1 text-[12px] font-medium text-muted hover:bg-sunken hover:text-ink" title="New group">
+          <FolderPlus className="size-3.5" /> {groups.length ? "" : "New group"}
+        </button>
+      </div>
+      {active && (
+        <div className="flex items-center justify-between gap-2 text-[12px] text-muted">
+          <span className="truncate">
+            In <span className="font-medium text-ink">{active.name}</span>
+            {active.source?.kind === "book" ? " — quotes and notes from this book land here" : active.source?.kind === "podcast" ? " — notes from this podcast land here" : ""}
+          </span>
+          <span className="flex shrink-0 items-center">
+            <IconButton label="Rename group" onClick={() => setNaming({ id: active.id, name: active.name })} className="size-7">
+              <Pencil className="size-3.5" />
+            </IconButton>
+            <IconButton
+              label="Delete group"
+              className="size-7 hover:text-neg"
+              onClick={async () => {
+                if (!(await ask({ title: `Delete the group “${active.name}”?`, body: "Its notes stay, without a group.", confirmLabel: "Delete group", danger: true }))) return;
+                removeGroup(active.id);
+                onPick(null);
+              }}
+            >
+              <Trash2 className="size-3.5" />
+            </IconButton>
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
 function NoteEditor({
   note,
+  groups,
   onChange,
   onBack,
   onDelete,
 }: {
   note: Note;
+  groups: NoteGroup[];
   onChange: (patch: Partial<Note>) => void;
   onBack: () => void;
   onDelete: () => void;
@@ -240,8 +358,28 @@ function NoteEditor({
         <IconButton label="Back to notes" onClick={onBack} className="-ml-2 lg:hidden">
           <ChevronLeft className="size-5" />
         </IconButton>
-        <span className="text-[13px] text-faint">{edited(note.updatedAt)}</span>
+        <span className="text-[13px] text-faint max-sm:hidden">{edited(note.updatedAt)}</span>
         <div className="flex-1" />
+        {/* Which group it's in */}
+        <label className="relative mr-1 flex min-w-0 items-center gap-1 rounded-lg px-2 py-1 text-[13px] text-muted hover:bg-sunken hover:text-ink" title="Move to a group">
+          <Folder className="size-3.5 shrink-0" />
+          <span className="max-w-[10rem] truncate">{groups.find((g) => g.id === note.groupId)?.name ?? "No group"}</span>
+          <select
+            value={groups.some((g) => g.id === note.groupId) ? note.groupId : ""}
+            onChange={(e) => onChange({ groupId: e.target.value || undefined })}
+            className="absolute inset-0 cursor-pointer opacity-0"
+            aria-label="Group"
+          >
+            <option value="">No group</option>
+            {[...groups]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+          </select>
+        </label>
         <div className="mr-1 hidden items-center gap-1.5 sm:flex">
           {SWATCHES.map((sw) => (
             <button

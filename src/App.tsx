@@ -14,6 +14,8 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { Notices } from "@/components/Notices";
 import { RecordingPill } from "@/modules/meetings/RecordingPill";
 import { FocusPill } from "@/modules/focus/FocusPill";
+import { PlayerBar } from "@/modules/podcasts/PlayerBar";
+import { usePodcastChecker } from "@/modules/podcasts/player";
 import { useFocusEngine } from "@/modules/focus/engine";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { cloudEnabled, startAuth, useAuth } from "@/lib/cloud";
@@ -81,6 +83,7 @@ function Main() {
   useReminders();
   useBackgroundMode();
   useFocusEngine();
+  usePodcastChecker();
   useReleaseChecker();
   return (
     <HashRouter>
@@ -102,6 +105,7 @@ function Main() {
       <UpdateBanner />
       <RecordingPill />
       <FocusPill />
+      <PlayerBar />
       <Notices />
     </HashRouter>
   );

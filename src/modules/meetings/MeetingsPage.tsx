@@ -29,17 +29,19 @@ import { Button, Card, EmptyState, IconButton, Modal, PageHeader, Segmented, Sel
 import { explain, useAiReady, useAssistant } from "@/lib/ai";
 import { cn } from "@/lib/utils";
 import { formatDuration, PRIORITIES } from "@/modules/calendar/store";
-import { addEvent, addTask, analyze, copyText, summaryText, todayLabel, writeNotesPage } from "./agent";
+import { addEvent, addTask, copyText, summaryText, todayLabel, writeNotesPage } from "./agent";
 import { LANGUAGES, speechSupported } from "./speech";
 import { backlog as transcribing, elapsedFor, startRecording, stopRecording, useRecording } from "./session";
-import { localMicSupported, meetingCaptureSupported, queued } from "./capture";
+import { localMicSupported, meetingCaptureSupported } from "./capture";
 import { countClips, deleteMeetingClips } from "./clips";
 import { improveTranscript, useImprove } from "./improve";
+import { generateNotes, useNotesJobs } from "./notesJob";
 import { STT_PROVIDERS, useCloudStt } from "./stt";
 import { clock, parseTranscript, useMeetings, type Meeting } from "./store";
 
 export function MeetingsPage() {
   const { meetings, create, remove } = useMeetings();
+  const jobs = useNotesJobs((s) => s.jobs);
   const [params, setParams] = useSearchParams();
   const selected = meetings.find((m) => m.id === params.get("id")) ?? null;
   const select = (id: string | null) => setParams(id ? { id } : {}, { replace: true });
@@ -74,7 +76,13 @@ export function MeetingsPage() {
                     <div className="mt-0.5 flex items-center gap-2 text-[12px] text-muted">
                       {format(m.startedAt, "MMM d, HH:mm")}
                       {(m.recorded > 0 || m.segments.length > 0) && <span>· {clock(m.recorded || (m.segments.at(-1)?.at ?? 0))}</span>}
-                      {m.analysis && <Sparkles className="size-3 text-cal" />}
+                      {jobs[m.id]?.running ? (
+                        <span className="flex items-center gap-1 text-cal">
+                          <Sparkles className="size-3 animate-pulse" /> writing notes…
+                        </span>
+                      ) : (
+                        m.analysis && <Sparkles className="size-3 text-cal" />
+                      )}
                     </div>
                   </button>
                 </li>
@@ -123,10 +131,13 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
   const { update, setLanguage, mode, setMode } = useMeetings();
   const hasKey = useAiReady();
   const ai = useAssistant();
-  const [busy, setBusy] = useState(false);
+  // Writing the notes is a job of the app (notesJob.ts): it carries on when you leave this screen.
+  const job = useNotesJobs((s) => s.jobs[meeting.id]);
+  const busy = !!job?.running;
   // "reading part 2 of 4", while a long meeting is read in pieces
-  const [step, setStep] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const step = job?.step ?? "";
+  const [importError, setError] = useState<string | null>(null);
+  const error = importError ?? job?.error ?? null;
   const [pasting, setPasting] = useState(false);
   const [showTranscript, setShowTranscript] = useState(!meeting.analysis);
   const [now, setNow] = useState(Date.now());
@@ -164,30 +175,19 @@ function MeetingView({ meeting, onBack, onDelete }: { meeting: Meeting; onBack: 
 
   const toggle = () => (listening ? pause() : void startRecording(meeting.id));
 
-  const run = async () => {
+  const run = () => {
     if (listening) pause();
-    setBusy(true);
     setError(null);
-    try {
-      // Let the last utterances finish transcribing first — on this device a long meeting can leave
-      // many; keep waiting as long as they're moving, and give up after a minute without progress.
-      let left = queued;
-      let movedAt = Date.now();
-      while (queued > 0 && Date.now() - movedAt < 60_000) {
-        setStep(`finishing the transcript — ${queued} line${queued === 1 ? "" : "s"} left`);
-        await new Promise((r) => setTimeout(r, 500));
-        if (queued < left) (left = queued), (movedAt = Date.now());
-      }
-      setStep("");
-      const analysis = await analyze(useMeetings.getState().meetings.find((m) => m.id === meeting.id)!, setStep);
-      update(meeting.id, { analysis, title: meeting.title || analysis.title });
-      setShowTranscript(false);
-    } catch (e) {
-      setError(explain(e));
-    } finally {
-      setBusy(false);
-    }
+    void generateNotes(meeting.id);
   };
+
+  // New notes arrived (here or while you were elsewhere): show them rather than the transcript.
+  const generatedAt = meeting.analysis?.generatedAt;
+  const seenAt = useRef(generatedAt);
+  useEffect(() => {
+    if (generatedAt && generatedAt !== seenAt.current) setShowTranscript(false);
+    seenAt.current = generatedAt;
+  }, [generatedAt]);
 
   const importFile = async (file: File) => {
     const segments = parseTranscript(await file.text());

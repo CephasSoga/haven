@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { CalendarDays, Clapperboard, Library, MessagesSquare, Mic, Newspaper, NotebookPen, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, Clapperboard, Library, MessagesSquare, Mic, Newspaper, NotebookPen, Podcast, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
 
 export type ModuleDef = {
   id: string;
@@ -19,7 +19,7 @@ export type GroupId = "work" | "money" | "leisure" | "private";
 export const GROUPS: { id: GroupId; name: string }[] = [
   { id: "work", name: "Work" },
   { id: "money", name: "Money" },
-  { id: "leisure", name: "Read & watch" },
+  { id: "leisure", name: "Read, watch & listen" },
   { id: "private", name: "Private" },
 ];
 
@@ -38,6 +38,7 @@ export const MODULES: ModuleDef[] = [
   { id: "subscriptions", name: "Subscriptions", path: "/subscriptions", icon: Repeat, accent: "#d6589f", group: "money", page: lazy(() => import("./subscriptions/SubscriptionsPage").then((m) => ({ default: m.SubscriptionsPage }))) },
   { id: "feed", name: "Morning", path: "/morning", icon: Newspaper, accent: "#c0583f", group: "leisure", page: lazy(() => import("./feed/FeedPage").then((m) => ({ default: m.FeedPage }))) },
   { id: "library", name: "Library", path: "/library", icon: Library, accent: "#3b82f6", group: "leisure", page: lazy(() => import("./library/LibraryPage").then((m) => ({ default: m.LibraryPage }))) },
+  { id: "podcasts", name: "Podcasts", path: "/podcasts", icon: Podcast, accent: "#9b5de5", group: "leisure", page: lazy(() => import("./podcasts/PodcastsPage").then((m) => ({ default: m.PodcastsPage }))) },
   { id: "releases", name: "Releases", path: "/releases", icon: Clapperboard, accent: "#0ea5b7", group: "leisure", page: lazy(() => import("./releases/ReleasesPage").then((m) => ({ default: m.ReleasesPage }))) },
   { id: "decisions", name: "Decisions", path: "/decisions", icon: Scale, accent: "#0f766e", group: "private", page: lazy(() => import("./decisions/DecisionsPage").then((m) => ({ default: m.DecisionsPage }))) },
   { id: "vault", name: "Vault", path: "/vault", icon: ShieldCheck, accent: "var(--pos)", group: "private", page: lazy(() => import("./vault/VaultPage").then((m) => ({ default: m.VaultPage }))) },
