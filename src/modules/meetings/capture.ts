@@ -300,8 +300,11 @@ export class MeetingCapture {
     this.stopped = true;
     this.segmenters.forEach((s) => s.flush());
     this.streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
-    this.ctx?.close();
+    const ctx = this.ctx;
     this.ctx = null;
+    // Closing an already-closed context throws here and now (it isn't a rejected promise),
+    // so the state has to be checked rather than caught.
+    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => undefined);
   }
 }
 

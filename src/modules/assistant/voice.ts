@@ -40,14 +40,31 @@ export class VoiceNote {
     silent.connect(this.ctx.destination);
   }
 
+  /** Lets go of the microphone and the audio device. Safe to call more than once (stop, then the page's cleanup). */
+  private async release() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    const ctx = this.ctx;
+    this.ctx = null;
+    if (ctx && ctx.state !== "closed") await ctx.close().catch(() => undefined);
+  }
+
+  /** Takes what has been recorded so far, leaving nothing behind. */
+  private take() {
+    const chunks = this.chunks;
+    this.chunks = [];
+    const audio = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
+    let at = 0;
+    for (const c of chunks) (audio.set(c, at), (at += c.length));
+    return audio;
+  }
+
   /** Stops recording and returns what was said. */
   async stop(onStatus?: (s: string) => void) {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    await this.ctx?.close();
-    const audio = new Float32Array(this.chunks.reduce((n, c) => n + c.length, 0));
-    let at = 0;
-    for (const c of this.chunks) (audio.set(c, at), (at += c.length));
-    this.chunks = [];
+    // Take the audio before letting go of the device: releasing waits, and the page's
+    // own cleanup runs in that gap and would otherwise clear the recording from under us.
+    const audio = this.take();
+    await this.release();
     if (audio.length < RATE / 2) return "";
     const language = useMeetings.getState().language;
     if (cloudStt()) {
@@ -66,8 +83,7 @@ export class VoiceNote {
   }
 
   cancel() {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    void this.ctx?.close();
+    void this.release();
     this.chunks = [];
   }
 }
