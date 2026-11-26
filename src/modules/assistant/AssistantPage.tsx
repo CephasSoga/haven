@@ -29,8 +29,8 @@ import { ask } from "@/components/confirm";
 import { Button, Card, EmptyState, IconButton, PageHeader } from "@/components/ui";
 import { useAiReady, useAssistant as useAssistantName } from "@/lib/ai";
 import { cn } from "@/lib/utils";
-import { apply, describe, problemWith, type Description } from "./actions";
-import { send, stop } from "./ask";
+import { apply, applyContext, describe, problemWith, type Action, type Description } from "./actions";
+import { send, stop, useProgress } from "./ask";
 import { sortChats, useAssistant, type Chat, type ChatMessage, type Proposal } from "./store";
 import { VoiceNote, voiceSupported } from "./voice";
 
@@ -194,6 +194,7 @@ function Welcome({ onSend }: { onSend: (text: string) => void }) {
 function ChatView({ chat, onBack, onDeleted }: { chat: Chat; onBack: () => void; onDeleted: () => void }) {
   const { update, remove } = useAssistant();
   const startedAt = useAssistant((s) => s.pending[chat.id]);
+  const progress = useProgress((s) => s[chat.id]);
   const ai = useAssistantName();
   const bottom = useRef<HTMLDivElement>(null);
   const [, tick] = useState(0);
@@ -254,7 +255,7 @@ function ChatView({ chat, onBack, onDeleted }: { chat: Chat; onBack: () => void;
         {startedAt && (
           <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-wrap items-center gap-2 px-1 text-[13px] text-muted">
             <Loader2 className="size-4 animate-spin" style={{ color: ACCENT }} />
-            {ai} is thinking… {seconds}s
+            {ai} is thinking… {seconds}s{progress ? ` · ${progress}` : ""}
             {seconds >= 20 && <span className="text-faint">· this one is taking a while</span>}
             <Button size="sm" variant="ghost" onClick={() => stop(chat.id)}>
               <Square className="size-3" fill="currentColor" /> Stop
@@ -297,19 +298,23 @@ function Proposals({ chatId, message }: { chatId: string; message: ChatMessage }
 
   const applyChosen = () => {
     const done: (() => void)[] = [];
-    for (const p of pending) {
+    const ctx = applyContext();
+    const all = proposals.map((p) => p.action);
+    // New projects first, so their tasks can go in them.
+    const ordered = [...pending].sort((a, b) => Number(b.action.kind === "create_project") - Number(a.action.kind === "create_project"));
+    for (const p of ordered) {
       if (!p.include) {
         patchProposal(chatId, message.id, p.id, { status: "skipped" });
         continue;
       }
       // Check again: your data may have changed since the proposal was made.
-      const problem = problemWith(p.action);
+      const problem = problemWith(p.action, all);
       if (problem) {
         patchProposal(chatId, message.id, p.id, { status: "failed", problem });
         continue;
       }
       try {
-        done.push(apply(p.action));
+        done.push(apply(p.action, ctx));
         patchProposal(chatId, message.id, p.id, { status: "applied" });
       } catch (e) {
         patchProposal(chatId, message.id, p.id, { status: "failed", problem: e instanceof Error ? e.message : String(e) });
@@ -329,7 +334,7 @@ function Proposals({ chatId, message }: { chatId: string; message: ChatMessage }
     <Card className="overflow-hidden">
       <ul className="divide-y divide-line">
         {proposals.map((p) => (
-          <ProposalRow key={p.id} proposal={p} onToggle={() => patchProposal(chatId, message.id, p.id, { include: !p.include })} />
+          <ProposalRow key={p.id} proposal={p} siblings={proposals.map((x) => x.action)} onToggle={() => patchProposal(chatId, message.id, p.id, { include: !p.include })} />
         ))}
       </ul>
       {(pending.length > 0 || canUndo) && (
@@ -367,8 +372,8 @@ const STATUS: Partial<Record<Proposal["status"], { label: string; className: str
   undone: { label: "Undone", className: "text-faint" },
 };
 
-function ProposalRow({ proposal: p, onToggle }: { proposal: Proposal; onToggle: () => void }) {
-  const d = describe(p.action);
+function ProposalRow({ proposal: p, siblings, onToggle }: { proposal: Proposal; siblings: Action[]; onToggle: () => void }) {
+  const d = describe(p.action, siblings);
   const Icon = AREA_ICON[d.area];
   const pending = p.status === "pending";
   const status = STATUS[p.status];

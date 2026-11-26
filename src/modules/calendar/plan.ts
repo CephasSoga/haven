@@ -33,11 +33,12 @@ export function usePlan() {
   const events = useCalendar((s) => s.events);
   const tasks = useCalendar((s) => s.tasks);
   const prefs = useCalendar((s) => s.prefs);
+  const projects = useCalendar((s) => s.projects);
   const now = useNow();
   return useMemo(() => {
-    lastPlan = schedule({ tasks, events, prefs, now, previous: lastPlan });
+    lastPlan = schedule({ tasks, events, prefs, now, previous: lastPlan, projects });
     return lastPlan;
-  }, [tasks, events, prefs, now]);
+  }, [tasks, events, prefs, now, projects]);
 }
 
 /** Something drawn on the calendar: an event occurrence, a slice of a task, or a bill or subscription payment. */

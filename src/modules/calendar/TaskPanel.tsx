@@ -31,10 +31,12 @@ export function TaskPanel({
     const sb = first(b);
     return (sa ? sa.date + sa.start : "~") .localeCompare(sb ? sb.date + sb.start : "~");
   };
-  const risky = (t: Task) => ["late", "unscheduled"].includes(plan.byTask.get(t.id)?.status ?? "");
+  const risky = (t: Task) => ["late", "unscheduled", "blocked"].includes(plan.byTask.get(t.id)?.status ?? "");
   const attention = open.filter(risky).sort(byWhen);
   const todays = open.filter((t) => !risky(t) && first(t)?.date === today).sort(byWhen);
   const later = open.filter((t) => !risky(t) && first(t) && first(t)!.date !== today).sort(byWhen);
+  // Tasks of projects on hold: kept in view, not planned.
+  const onHold = open.filter((t) => plan.byTask.get(t.id)?.status === "paused");
   const done = tasks.filter((t) => t.done).sort((a, b) => b.done!.at - a.done!.at).slice(0, 12);
 
   const next = plan.next && tasks.find((t) => t.id === plan.next!.taskId);
@@ -124,6 +126,7 @@ export function TaskPanel({
         <Group title="Needs attention" tone="neg" tasks={attention} plan={plan} onOpen={onOpen} onToggle={onToggle} />
         <Group title="Today" tasks={todays} plan={plan} onOpen={onOpen} onToggle={onToggle} />
         <Group title="Coming up" tasks={later} plan={plan} onOpen={onOpen} onToggle={onToggle} />
+        <Group title="On hold" tasks={onHold} plan={plan} onOpen={onOpen} onToggle={onToggle} />
         {done.length > 0 && (
           <div>
             <button onClick={() => setShowDone(!showDone)} className="flex w-full items-center gap-1 px-5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-faint hover:text-muted">
@@ -185,6 +188,8 @@ export function TaskRow({ task: t, plan, onOpen, onToggle }: { task: Task; plan:
   const slot = info?.slots[0];
   const sw = swatch(taskColor(t));
   const late = !t.done && info?.status === "late";
+  const project = useCalendar((s) => (t.projectId ? s.projects.find((p) => p.id === t.projectId) : undefined));
+  const status = info?.status;
   return (
     <div className="group flex items-start gap-3 px-3 py-0.5">
       <button
@@ -206,7 +211,15 @@ export function TaskRow({ task: t, plan, onOpen, onToggle }: { task: Task; plan:
               {info!.slots.length > 1 && <span className="text-faint">+{info!.slots.length - 1}</span>}
             </Meta>
           )}
-          {!t.done && !slot && <Meta className="text-neg">No time found</Meta>}
+          {!t.done && !slot && (
+            <Meta className={status === "paused" ? undefined : "text-neg"}>{status === "paused" ? "Project on hold" : status === "blocked" ? "Blocked" : "No time found"}</Meta>
+          )}
+          {project && (
+            <Meta>
+              <span className="size-1.5 rounded-full" style={{ background: swatch(project.color).fg }} />
+              <span className="max-w-32 truncate">{project.name}</span>
+            </Meta>
+          )}
           {t.deadline && !t.done && (
             <Meta className={late ? "font-medium text-neg" : undefined}>
               {t.deadline < todayKey() ? "Overdue since" : "Due"} {dayLabel(t.deadline)}

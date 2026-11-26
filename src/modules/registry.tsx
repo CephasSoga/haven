@@ -1,5 +1,5 @@
 import { lazy, type ComponentType } from "react";
-import { CalendarDays, Clapperboard, GraduationCap, Library, MessagesSquare, Mic, BookHeadphones, Newspaper, NotebookPen, Podcast, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarDays, Clapperboard, FolderKanban, GraduationCap, Library, MessagesSquare, Mic, BookHeadphones, Newspaper, NotebookPen, Podcast, Repeat, Scale, Timer, ShieldCheck, Wallet, type LucideIcon } from "lucide-react";
 
 export type ModuleDef = {
   id: string;
@@ -31,6 +31,7 @@ export const GROUPS: { id: GroupId; name: string }[] = [
 export const MODULES: ModuleDef[] = [
   { id: "assistant", name: "Assistant", path: "/assistant", icon: MessagesSquare, accent: "#8b5cf6", page: lazy(() => import("./assistant/AssistantPage").then((m) => ({ default: m.AssistantPage }))) },
   { id: "calendar", name: "Calendar", path: "/calendar", icon: CalendarDays, accent: "var(--cal)", group: "work", page: lazy(() => import("./calendar/CalendarPage").then((m) => ({ default: m.CalendarPage }))) },
+  { id: "projects", name: "Projects", path: "/projects", icon: FolderKanban, accent: "#4f6bed", group: "work", page: lazy(() => import("./projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage }))) },
   { id: "focus", name: "Focus", path: "/focus", icon: Timer, accent: "#e0803a", group: "work", page: lazy(() => import("./focus/FocusPage").then((m) => ({ default: m.FocusPage }))) },
   { id: "notes", name: "Notes", path: "/notes", icon: NotebookPen, accent: "var(--note)", group: "work", page: lazy(() => import("./notes/NotesPage").then((m) => ({ default: m.NotesPage }))) },
   { id: "meetings", name: "Meetings", path: "/meetings", icon: Mic, accent: "var(--neg)", group: "work", page: lazy(() => import("./meetings/MeetingsPage").then((m) => ({ default: m.MeetingsPage }))) },

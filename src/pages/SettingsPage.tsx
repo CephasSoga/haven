@@ -79,7 +79,7 @@ export function SettingsPage() {
       version: 1,
       exportedAt: new Date().toISOString(),
       settings: { name: settings.name, theme: settings.theme, currency: settings.currency, weekStartsOn: settings.weekStartsOn },
-      calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs },
+      calendar: { events: calendar.events, tasks: calendar.tasks, prefs: calendar.prefs, projects: calendar.projects, templates: calendar.templates },
       finances: { accounts: finance.accounts, categories: finance.categories, transactions: finance.transactions, rules: finance.rules, bills: finance.bills },
       notes: { notes: notes.notes, groups: notes.groups },
       // Already encrypted — the backup never contains vault contents in the clear.
@@ -113,7 +113,13 @@ export function SettingsPage() {
       if (data.app !== "haven") throw new Error("Not a Haven backup");
       if (!(await ask({ title: "Restore this backup?", body: "Everything in Haven will be replaced with the contents of the backup file.", confirmLabel: "Restore", danger: true }))) return;
       if (data.settings) settings.set(data.settings);
-      calendar.replaceAll({ events: data.calendar?.events ?? [], tasks: data.calendar?.tasks ?? [], prefs: data.calendar?.prefs });
+      calendar.replaceAll({
+        events: data.calendar?.events ?? [],
+        tasks: data.calendar?.tasks ?? [],
+        prefs: data.calendar?.prefs,
+        projects: data.calendar?.projects ?? [],
+        templates: data.calendar?.templates ?? [],
+      });
       finance.replaceAll({
         accounts: data.finances?.accounts ?? DEFAULT_ACCOUNTS,
         categories: data.finances?.categories ?? DEFAULT_CATEGORIES,
@@ -237,7 +243,7 @@ export function SettingsPage() {
             variant="danger"
             onClick={async () => {
               if (!(await ask({ title: "Erase everything?", body: "All of your Haven data will be deleted from this browser, including your vault and library. Export a backup first if you might want it back.", confirmLabel: "Erase everything", danger: true }))) return;
-              calendar.replaceAll({ events: [], tasks: [] });
+              calendar.replaceAll({ events: [], tasks: [], projects: [], templates: [] });
               notes.replaceAll([], []);
               vault.restore(null);
               void useDecisions.getState().restore(null);

@@ -2,7 +2,8 @@ import { format } from "date-fns";
 import { formatMoney } from "@/lib/money";
 import { parseDay, todayKey } from "@/lib/dates";
 import { useSettings } from "@/store/settings";
-import { PRIORITIES, repeatSummary, taskTypes, timeRange, useCalendar, type CalendarEvent, type EventDraft, type Priority, type Repeat, type Task } from "@/modules/calendar/store";
+import { PRIORITIES, PROJECT_STATUSES, repeatSummary, taskTypes, timeRange, useCalendar, type CalendarEvent, type EventDraft, type Priority, type Project, type ProjectStatus, type Repeat, type Task } from "@/modules/calendar/store";
+import { createProject } from "@/modules/projects/logic";
 import { TRANSFER, useFinance, type Transaction } from "@/modules/finances/store";
 import { useNotes, type Note } from "@/modules/notes/store";
 
@@ -20,6 +21,8 @@ export const KINDS = [
   "update_task",
   "complete_task",
   "delete_task",
+  "create_project",
+  "update_project",
   "add_transaction",
   "create_note",
   "append_note",
@@ -46,6 +49,23 @@ type TaskFields = {
   deadline: string | null;
   start_date: string | null;
   notes: string | null;
+  /** A project's id, or the key of a project proposed in the same answer */
+  project: string | null;
+  /** The stage's name, within that project */
+  stage: string | null;
+  /** Titles of the project's tasks that must be finished first */
+  after: string[] | null;
+};
+type ProjectFields = {
+  /** A short label (p1, p2…) for tasks in the same answer to refer to it */
+  key: string;
+  name: string;
+  description: string | null;
+  start_date: string | null;
+  deadline: string | null;
+  stages: string[];
+  sequential: boolean;
+  status: ProjectStatus;
 };
 type TxFields = {
   kind: "expense" | "income" | "transfer";
@@ -67,6 +87,8 @@ export type Action = {
   transaction: TxFields | null;
   note: { title: string | null; body: string } | null;
   note_id: string | null;
+  project: ProjectFields | null;
+  project_id: string | null;
 };
 
 /* ---------- The shape the AI must answer in ---------- */
@@ -86,6 +108,7 @@ const TIME = { type: "string", description: "HH:mm, 24-hour" };
 /** The answer format; built when asking, so the task types include the ones you added. */
 export const answerSchema = () => closed({
   reply: { type: "string", description: "What you say back, briefly, in the user's language. If you need more details before acting, ask here and propose nothing." },
+  more: { type: "boolean", description: "true when more changes are needed than this answer holds; you'll then be asked for the next ones" },
   actions: {
     type: "array",
     description: "Changes to propose. Empty when the user only asked a question or something is unclear.",
@@ -119,6 +142,9 @@ export const answerSchema = () => closed({
             deadline: nul(DAY),
             start_date: nul(DAY),
             notes: nul(str),
+            project: nul({ ...str, description: "The project it belongs to: an id from the list of projects, or the key of a project you propose in this answer" }),
+            stage: nul({ ...str, description: "The name of one of that project's stages" }),
+            after: nul({ type: "array", items: str, description: "Titles of tasks in the same project that must be finished before this one starts" }),
           },
           "create_task: the new task. update_task: the complete task after the change.",
         ),
@@ -137,6 +163,22 @@ export const answerSchema = () => closed({
       ),
       note: nul(closed({ title: nul(str), body: { ...str, description: "create_note: the note's text. append_note: the text to add at the end." } })),
       note_id: nul({ ...str, description: "append_note: an id from the list of notes" }),
+      project: nul(
+        closed(
+          {
+            key: { ...str, description: "A short label like p1, for tasks in this answer to refer to the project" },
+            name: str,
+            description: nul(str),
+            start_date: nul(DAY),
+            deadline: nul(DAY),
+            stages: { type: "array", items: str, description: "Its steps in order (e.g. Research, Draft, Review); empty if none" },
+            sequential: { type: "boolean", description: "Each stage starts once the one before is finished" },
+            status: { type: "string", enum: Object.keys(PROJECT_STATUSES) },
+          },
+          "create_project: the new project. update_project: the complete project after the change (stages by name, existing ones kept).",
+        ),
+      ),
+      project_id: nul({ ...str, description: "update_project: an id from the list of projects" }),
     }),
   },
 });
@@ -146,9 +188,17 @@ export const answerSchema = () => closed({
 const isDay = (d: string | null | undefined) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(parseDay(d).getTime());
 const isTime = (t: string | null | undefined) => !!t && /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 
-/** Why a proposal can't be applied as it stands, or null when it's fine. */
-export function problemWith(a: Action): string | null {
-  const { events, tasks } = useCalendar.getState();
+/** The project a task names: an existing one's id, or the key of one proposed alongside it. */
+const projectRef = (ref: string | null | undefined, siblings: Action[]) => {
+  if (!ref) return { known: true, project: undefined as Project | undefined, proposed: undefined as ProjectFields | undefined };
+  const project = useCalendar.getState().projects.find((p) => p.id === ref);
+  const proposed = siblings.find((s) => s.kind === "create_project" && s.project?.key === ref)?.project ?? undefined;
+  return { known: !!project || !!proposed, project, proposed };
+};
+
+/** Why a proposal can't be applied as it stands, or null when it's fine. `siblings`: the other proposals of the same answer. */
+export function problemWith(a: Action, siblings: Action[] = []): string | null {
+  const { events, tasks, projects } = useCalendar.getState();
   const { accounts, categories } = useFinance.getState();
   const notes = useNotes.getState().notes;
   const needs = (ok: unknown, why: string) => (ok ? null : why);
@@ -167,7 +217,19 @@ export function problemWith(a: Action): string | null {
                 ? "The end date isn't valid"
                 : null;
   const taskOk = (t: TaskFields | null) =>
-    !t ? "No task details" : !t.title.trim() ? "The task has no title" : !(t.duration_minutes > 0) ? "The duration isn't valid" : (t.deadline && !isDay(t.deadline)) || (t.start_date && !isDay(t.start_date)) ? "A date isn't valid" : null;
+    !t
+      ? "No task details"
+      : !t.title.trim()
+        ? "The task has no title"
+        : !(t.duration_minutes > 0)
+          ? "The duration isn't valid"
+          : (t.deadline && !isDay(t.deadline)) || (t.start_date && !isDay(t.start_date))
+            ? "A date isn't valid"
+            : !projectRef(t.project, siblings).known
+              ? "That project doesn't exist"
+              : null;
+  const projectOk = (p: ProjectFields | null) =>
+    !p ? "No project details" : !p.name.trim() ? "The project has no name" : (p.deadline && !isDay(p.deadline)) || (p.start_date && !isDay(p.start_date)) ? "A date isn't valid" : null;
 
   switch (a.kind) {
     case "create_event":
@@ -183,6 +245,10 @@ export function problemWith(a: Action): string | null {
     case "complete_task":
     case "delete_task":
       return needs(tasks.some((t) => t.id === a.task_id), "That task doesn't exist");
+    case "create_project":
+      return projectOk(a.project);
+    case "update_project":
+      return needs(projects.some((p) => p.id === a.project_id), "That project doesn't exist") ?? projectOk(a.project);
     case "add_transaction": {
       const t = a.transaction;
       if (!t) return "No transaction details";
@@ -223,8 +289,8 @@ function changes(before: Record<string, unknown>, after: Record<string, unknown>
     .map(([k, label]) => `${label}: ${before[k] ?? "—"} → ${after[k] ?? "—"}`);
 }
 
-export function describe(a: Action): Description {
-  const { events, tasks } = useCalendar.getState();
+export function describe(a: Action, siblings: Action[] = []): Description {
+  const { events, tasks, projects } = useCalendar.getState();
   const { accounts, categories } = useFinance.getState();
   const currency = useSettings.getState().currency;
   const notes = useNotes.getState().notes;
@@ -246,6 +312,8 @@ export function describe(a: Action): Description {
       return { area: "calendar", verb: "Delete event", title: event?.title ?? "Unknown", details: event ? [`${when(event.date)}${event.start ? ` · ${timeRange(event)}` : ""}${event.repeat && event.repeat !== "none" ? " · the whole series" : ""}`] : [] };
     case "create_task": {
       const t = a.task!;
+      const ref = t?.project ? projectRef(t.project, siblings) : undefined;
+      const projectName = ref?.project?.name ?? ref?.proposed?.name;
       return {
         area: "task",
         verb: "New task",
@@ -253,11 +321,39 @@ export function describe(a: Action): Description {
         details: t
           ? [
               `${t.duration_minutes} min · ${PRIORITIES[t.priority]?.label ?? t.priority} priority · ${t.schedule === "work" ? "work hours" : "personal time"}`,
+              ...(projectName ? [`In ${projectName}${t.stage ? ` · ${t.stage}` : ""}`] : []),
+              ...(t.after?.length ? [`After ${t.after.map((x) => `“${x}”`).join(", ")}`] : []),
               ...(t.deadline ? [`Due ${when(t.deadline)}`] : []),
               ...(t.start_date ? [`Not before ${when(t.start_date)}`] : []),
             ]
           : [],
       };
+    }
+    case "create_project": {
+      const p = a.project!;
+      return {
+        area: "task",
+        verb: "New project",
+        title: p?.name ?? "",
+        details: p
+          ? [
+              ...(p.deadline ? [`Due ${when(p.deadline)}`] : []),
+              ...(p.start_date ? [`From ${when(p.start_date)}`] : []),
+              ...(p.stages.length ? [`Stages: ${p.stages.join(" → ")}${p.sequential ? " (one at a time)" : ""}`] : []),
+              ...(p.description ? [`“${p.description}”`] : []),
+            ]
+          : [],
+      };
+    }
+    case "update_project": {
+      const before = projects.find((p) => p.id === a.project_id);
+      const after = a.project!;
+      const d = changes(
+        { name: before?.name, status: before && PROJECT_STATUSES[before.status], deadline: before?.deadline, stages: before?.stages.map((s) => s.name).join(" → ") },
+        { name: after?.name, status: after && PROJECT_STATUSES[after.status], deadline: after?.deadline ?? undefined, stages: after?.stages.join(" → ") },
+        { name: "Name", status: "Status", deadline: "Deadline", stages: "Stages" },
+      );
+      return { area: "task", verb: "Change project", title: before?.name ?? "Unknown", details: d.length ? d : ["No visible change"] };
     }
     case "update_task": {
       const after = a.task!;
@@ -317,8 +413,25 @@ const toTask = (t: TaskFields) => ({
   notes: t.notes?.trim() || undefined,
 });
 
+/** What applying a set of proposals learns as it goes: which project each proposed key became. */
+export type ApplyContext = { projects: Map<string, string> };
+export const applyContext = (): ApplyContext => ({ projects: new Map() });
+
+/** A task's project, stage and blockers, resolved against your data (and projects just created). */
+function placement(t: TaskFields, ctx: ApplyContext): Partial<Task> {
+  const cal = useCalendar.getState();
+  const projectId = t.project ? (ctx.projects.get(t.project) ?? (cal.projects.some((p) => p.id === t.project) ? t.project : undefined)) : undefined;
+  if (!projectId) return { projectId: undefined, stageId: undefined };
+  const project = cal.projects.find((p) => p.id === projectId);
+  const norm = (s: string) => s.trim().toLowerCase();
+  const stageId = t.stage ? project?.stages.find((s) => norm(s.name) === norm(t.stage!))?.id : undefined;
+  const siblings = cal.tasks.filter((x) => x.projectId === projectId && !x.done);
+  const blockedBy = (t.after ?? []).map((title) => siblings.find((x) => norm(x.title) === norm(title))?.id).filter((id): id is string => !!id);
+  return { projectId, stageId, blockedBy: blockedBy.length ? [...new Set(blockedBy)] : undefined };
+}
+
 /** Carries out one approved action. Returns how to undo it. */
-export function apply(a: Action): () => void {
+export function apply(a: Action, ctx: ApplyContext = applyContext()): () => void {
   const cal = useCalendar;
   const fin = useFinance;
   const notesStore = useNotes;
@@ -340,13 +453,47 @@ export function apply(a: Action): () => void {
       return () => cal.setState((s) => ({ events: [...s.events, old] }));
     }
     case "create_task": {
-      const id = cal.getState().saveTask(toTask(a.task!));
+      const id = cal.getState().saveTask({ ...toTask(a.task!), ...placement(a.task!, ctx) });
       return () => cal.getState().removeTask(id);
     }
     case "update_task": {
       const old = cal.getState().tasks.find((t) => t.id === a.task_id)!;
-      cal.getState().saveTask({ ...old, ...toTask(a.task!) });
+      // Keep its project unless the change names one.
+      cal.getState().saveTask({ ...old, ...toTask(a.task!), ...(a.task!.project ? placement(a.task!, ctx) : {}) });
       return () => cal.setState((s) => ({ tasks: s.tasks.map((t) => (t.id === old.id ? old : t)) }));
+    }
+    case "create_project": {
+      const p = a.project!;
+      const { id } = createProject({
+        name: p.name.trim(),
+        description: p.description?.trim() || undefined,
+        startDate: p.start_date ?? undefined,
+        deadline: p.deadline ?? undefined,
+        stages: p.stages.filter((s) => s.trim()).map((name) => ({ name })),
+        sequential: p.sequential,
+        status: p.status,
+      });
+      ctx.projects.set(p.key, id);
+      return () => cal.getState().removeProject(id, false);
+    }
+    case "update_project": {
+      const old = cal.getState().projects.find((x) => x.id === a.project_id)!;
+      const oldTasks = cal.getState().tasks;
+      const p = a.project!;
+      const norm = (s: string) => s.trim().toLowerCase();
+      cal.getState().saveProject({
+        ...old,
+        name: p.name.trim(),
+        description: p.description?.trim() || undefined,
+        startDate: p.start_date ?? undefined,
+        deadline: p.deadline ?? undefined,
+        // Stages keep their identity (and tasks) when their name stays.
+        stages: p.stages.filter((s) => s.trim()).map((name) => old.stages.find((s) => norm(s.name) === norm(name)) ?? { id: crypto.randomUUID(), name: name.trim() }),
+        sequential: p.sequential,
+        status: p.status,
+        doneAt: p.status === "done" ? (old.doneAt ?? Date.now()) : undefined,
+      });
+      return () => cal.setState((s) => ({ projects: s.projects.map((x) => (x.id === old.id ? old : x)), tasks: oldTasks }));
     }
     case "complete_task": {
       const before: Task[] = cal.getState().tasks;

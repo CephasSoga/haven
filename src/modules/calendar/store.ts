@@ -101,6 +101,56 @@ export type Task = {
   notes?: string;
   done?: { at: number; slots: Slot[] };
   createdAt: number;
+  /** The project it belongs to */
+  projectId?: string;
+  /** Its stage within the project */
+  stageId?: string;
+  /** Tasks that have to be finished before this one can start */
+  blockedBy?: string[];
+  /** Begun (the project board's "In progress") */
+  started?: boolean;
+};
+
+/* ---------- Projects: related tasks with a shared goal, order and deadline ---------- */
+
+export type ProjectStatus = "active" | "paused" | "done" | "cancelled";
+
+export const PROJECT_STATUSES: Record<ProjectStatus, string> = { active: "Active", paused: "On hold", done: "Done", cancelled: "Cancelled" };
+
+/** A step of a project, in order (e.g. Research → Draft → Review). */
+export type Stage = { id: string; name: string; deadline?: string };
+
+export type Project = {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;
+  status: ProjectStatus;
+  /** For the tasks you add to it */
+  priority: Priority;
+  /** yyyy-MM-dd: no work before this day */
+  startDate?: string;
+  /** yyyy-MM-dd: everything done by then */
+  deadline?: string;
+  hardDeadline?: boolean;
+  stages: Stage[];
+  /** Each stage starts once the one before is finished */
+  sequential: boolean;
+  createdAt: number;
+  doneAt?: number;
+};
+
+export type ProjectDraft = Omit<Project, "id" | "createdAt"> & { id?: string; createdAt?: number };
+
+/** A project's shape to start new ones from: stages and tasks, without dates. */
+export type ProjectTemplate = {
+  id: string;
+  name: string;
+  description?: string;
+  sequential: boolean;
+  stages: string[];
+  tasks: { title: string; duration: number; priority: Priority; type: string; schedule: "work" | "personal"; chunk?: number; stage?: number; after?: number[]; notes?: string }[];
+  createdAt: number;
 };
 
 export type TaskDraft = Omit<Task, "id" | "createdAt"> & { id?: string; createdAt?: number };
@@ -161,6 +211,8 @@ export const DEFAULT_PREFS: PlannerPrefs = {
 type CalendarState = {
   events: CalendarEvent[];
   tasks: Task[];
+  projects: Project[];
+  templates: ProjectTemplate[];
   prefs: PlannerPrefs;
   save: (draft: EventDraft) => void;
   remove: (id: string) => void;
@@ -171,7 +223,12 @@ type CalendarState = {
   reopenTask: (id: string) => void;
   lockTask: (id: string, slot: Slot | undefined) => void;
   setPrefs: (patch: Partial<PlannerPrefs>) => void;
-  replaceAll: (data: { events: CalendarEvent[]; tasks?: Task[]; prefs?: PlannerPrefs }) => void;
+  saveProject: (draft: ProjectDraft) => string;
+  /** With `withTasks`, its open tasks go too; otherwise they stay as tasks of their own */
+  removeProject: (id: string, withTasks: boolean) => void;
+  saveTemplate: (t: Omit<ProjectTemplate, "id" | "createdAt">) => string;
+  removeTemplate: (id: string) => void;
+  replaceAll: (data: { events: CalendarEvent[]; tasks?: Task[]; prefs?: PlannerPrefs; projects?: Project[]; templates?: ProjectTemplate[] }) => void;
 };
 
 export const useCalendar = create<CalendarState>()(
@@ -179,6 +236,8 @@ export const useCalendar = create<CalendarState>()(
     (set, get) => ({
       events: [],
       tasks: [],
+      projects: [],
+      templates: [],
       prefs: DEFAULT_PREFS,
       save: (draft) =>
         set((s) => {
@@ -196,7 +255,11 @@ export const useCalendar = create<CalendarState>()(
         }));
         return id;
       },
-      removeTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),
+      removeTask: (id) =>
+        set((s) => ({
+          // Nothing waits for a task that's gone.
+          tasks: s.tasks.filter((t) => t.id !== id).map((t) => (t.blockedBy?.includes(id) ? { ...t, blockedBy: t.blockedBy.filter((b) => b !== id) } : t)),
+        })),
       completeTask: (id, slots) => {
         const task = get().tasks.find((t) => t.id === id);
         if (!task || task.done) return;
@@ -208,14 +271,51 @@ export const useCalendar = create<CalendarState>()(
       reopenTask: (id) => set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, done: undefined } : t)) })),
       lockTask: (id, slot) => set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, locked: slot } : t)) })),
       setPrefs: (patch) => set((s) => ({ prefs: { ...s.prefs, ...patch } })),
-      replaceAll: ({ events, tasks = [], prefs }) => set((s) => ({ events, tasks, prefs: prefs ?? s.prefs })),
+      saveProject: (draft) => {
+        const id = draft.id ?? uid();
+        const project: Project = { ...draft, id, createdAt: draft.createdAt ?? Date.now() };
+        set((s) => {
+          const exists = s.projects.some((p) => p.id === id);
+          // Tasks of a stage that was removed drop back to "no stage".
+          const stages = new Set(project.stages.map((x) => x.id));
+          return {
+            projects: exists ? s.projects.map((p) => (p.id === id ? project : p)) : [...s.projects, project],
+            tasks: s.tasks.map((t) => (t.projectId === id && t.stageId && !stages.has(t.stageId) ? { ...t, stageId: undefined } : t)),
+          };
+        });
+        return id;
+      },
+      removeProject: (id, withTasks) =>
+        set((s) => {
+          const gone = new Set(withTasks ? s.tasks.filter((t) => t.projectId === id && !t.done).map((t) => t.id) : []);
+          return {
+            projects: s.projects.filter((p) => p.id !== id),
+            tasks: s.tasks
+              .filter((t) => !gone.has(t.id))
+              .map((t) => {
+                let next = t;
+                if (t.projectId === id) next = { ...next, projectId: undefined, stageId: undefined };
+                if (next.blockedBy?.some((b) => gone.has(b))) next = { ...next, blockedBy: next.blockedBy!.filter((b) => !gone.has(b)) };
+                return next;
+              }),
+          };
+        }),
+      saveTemplate: (t) => {
+        const id = uid();
+        set((s) => ({ templates: [...s.templates, { ...t, id, createdAt: Date.now() }] }));
+        return id;
+      },
+      removeTemplate: (id) => set((s) => ({ templates: s.templates.filter((t) => t.id !== id) })),
+      replaceAll: ({ events, tasks = [], prefs, projects, templates }) =>
+        set((s) => ({ events, tasks, prefs: prefs ?? s.prefs, projects: projects ?? [], templates: templates ?? s.templates })),
     }),
     {
       name: "haven:calendar",
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
         const s = persisted as Partial<CalendarState>;
-        if (version < 2) return { ...s, tasks: [], prefs: DEFAULT_PREFS };
+        if (version < 2) return { ...s, tasks: [], prefs: DEFAULT_PREFS, projects: [], templates: [] };
+        if (version < 3) return { ...s, projects: [], templates: [] };
         return s;
       },
     },

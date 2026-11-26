@@ -10,7 +10,10 @@ const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
 const CHUNKS = [15, 30, 45, 60, 90];
 
 export function newTaskDraft(p: Partial<TaskDraft> = {}): TaskDraft {
-  return { title: "", duration: 30, priority: "medium", type: "deep", schedule: "work", ...p };
+  const draft: TaskDraft = { title: "", duration: 30, priority: "medium", type: "deep", schedule: "work", ...p };
+  // Anything over two hours goes in sittings of an hour or more, unless told otherwise.
+  if (draft.duration > 120 && !("chunk" in p)) draft.chunk = 60;
+  return draft;
 }
 
 /** "Write report 2h !!" → title "Write report", 120 min, ASAP. One "!" is High. */
@@ -143,6 +146,89 @@ function TypePicker({ value, types, onChange }: { value: string; types: Record<s
   );
 }
 
+/** Which project it's part of, its stage, what it waits for, and whether it's begun. */
+function ProjectFields({ f, patch }: { f: TaskDraft; patch: (p: Partial<TaskDraft>) => void }) {
+  const projects = useCalendar((s) => s.projects);
+  const tasks = useCalendar((s) => s.tasks);
+  const project = projects.find((p) => p.id === f.projectId);
+  const choices = projects.filter((p) => p.status === "active" || p.status === "paused" || p.id === f.projectId);
+  // What it can wait for: open tasks of the same project (or any open task, outside a project).
+  const candidates = tasks.filter((t) => !t.done && t.id !== f.id && (f.projectId ? t.projectId === f.projectId : true) && !f.blockedBy?.includes(t.id));
+  const waits = (f.blockedBy ?? []).map((id) => tasks.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t);
+  if (!choices.length && !waits.length && !candidates.length) return null;
+  return (
+    <div className="flex flex-col gap-4 rounded-2xl border border-line p-4">
+      {choices.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Project">
+            {(id) => (
+              <Select
+                id={id}
+                value={f.projectId ?? ""}
+                onChange={(e) => {
+                  const next = e.target.value || undefined;
+                  // A new project: its own stages, and only its own tasks to wait for.
+                  patch({ projectId: next, stageId: undefined, blockedBy: next ? f.blockedBy?.filter((b) => tasks.find((t) => t.id === b)?.projectId === next) : f.blockedBy });
+                }}
+              >
+                <option value="">None</option>
+                {choices.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          {project && project.stages.length > 0 && (
+            <Field label="Stage">
+              {(id) => (
+                <Select id={id} value={f.stageId ?? ""} onChange={(e) => patch({ stageId: e.target.value || undefined })}>
+                  <option value="">No stage</option>
+                  {project.stages.map((s, i) => (
+                    <option key={s.id} value={s.id}>
+                      {i + 1}. {s.name}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )}
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        <span className="text-[13px] font-medium text-muted">Waits for</span>
+        {waits.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {waits.map((t) => (
+              <span key={t.id} className="flex items-center gap-1 rounded-full bg-sunken py-1 pl-3 pr-1.5 text-[13px]">
+                {t.title}
+                <button type="button" aria-label={`Doesn't wait for ${t.title}`} onClick={() => patch({ blockedBy: f.blockedBy!.filter((b) => b !== t.id) })} className="rounded-full p-0.5 text-faint hover:text-ink">
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {candidates.length > 0 && (
+          <Select value="" onChange={(e) => e.target.value && patch({ blockedBy: [...(f.blockedBy ?? []), e.target.value] })} aria-label="Add a task it waits for" className="h-9 text-[13px]">
+            <option value="">{waits.length ? "And also…" : "Nothing — it can start any time. Pick a task…"}</option>
+            {candidates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </Select>
+        )}
+        {project?.sequential && f.stageId && project.stages.findIndex((s) => s.id === f.stageId) > 0 && (
+          <p className="text-[12px] text-muted">It also waits for the earlier stages of {project.name} to be finished.</p>
+        )}
+      </div>
+      {f.id && !f.done && <Switch label="In progress" checked={!!f.started} onChange={(started) => patch({ started })} />}
+    </div>
+  );
+}
+
 export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClose: () => void }) {
   const { saveTask, removeTask, completeTask, reopenTask, lockTask } = useCalendar();
   const plan = usePlan();
@@ -244,10 +330,10 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
           <div
             className={cn(
               "flex items-start gap-3 rounded-2xl px-4 py-3 text-[13px]",
-              info.status === "late" || info.status === "unscheduled" ? "bg-neg/10 text-neg" : "bg-sunken text-muted",
+              info.status === "late" || info.status === "unscheduled" || info.status === "blocked" ? "bg-neg/10 text-neg" : "bg-sunken text-muted",
             )}
           >
-            {info.status === "late" || info.status === "unscheduled" ? (
+            {info.status === "late" || info.status === "unscheduled" || info.status === "blocked" ? (
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             ) : f.locked ? (
               <Lock className="mt-0.5 size-4 shrink-0" />
@@ -265,7 +351,13 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
                   {info.slots.length > 3 && <div className="text-muted">+{info.slots.length - 3} more sessions</div>}
                 </div>
               ) : (
-                <div>No free time fits this task in the next {useCalendar.getState().prefs.horizon} days.</div>
+                <div>
+                  {info.status === "paused"
+                    ? "Its project is on hold, so it isn't planned for now."
+                    : info.status === "blocked"
+                      ? "It waits for a task that can't be planned yet (on hold, or no free time for it)."
+                      : `No free time fits this task in the next ${plan.horizon} days.`}
+                </div>
               )}
               {info.status === "late" && <div className="mt-1 font-medium">Won't be done by the deadline at this rate.</div>}
               {info.status === "tight" && <div className="mt-1">Finishes on its deadline day — cutting it close.</div>}
@@ -325,6 +417,8 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
         <Field label="Type of work">
           {() => <TypePicker value={f.type} types={types} onChange={(type) => patch({ type })} />}
         </Field>
+
+        <ProjectFields f={f} patch={patch} />
 
         <Field label="When can it happen?">
           {() => (
