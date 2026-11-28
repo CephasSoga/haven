@@ -87,8 +87,11 @@ export const useMeetings = create<MeetingsState>()(
       },
       update: (id, patch) => set((s) => ({ meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
       // Lines can finish transcribing out of order (you and the meeting are transcribed separately), so keep them in time order.
+      // A line with no words (speech recognition's "…" for silence or noise) isn't kept.
       addSegment: (id, seg) =>
-        set((s) => ({
+        isFiller(seg.text)
+          ? undefined
+          : set((s) => ({
           meetings: s.meetings.map((m) => {
             if (m.id !== id) return m;
             let i = m.segments.length;
@@ -125,8 +128,15 @@ export function clock(ms: number) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+/** A line with no words in it: "...", "…", "-". Speech recognition writes these for silence or noise. */
+export const isFiller = (text: string) => !/[\p{L}\p{N}]/u.test(text);
+
+/** The transcript as the AI reads it: one line per sentence, without the empty ones. */
 export function transcriptText(segments: Segment[]) {
-  return segments.map((s) => `[${clock(s.at)}] ${s.speaker ? `${s.speaker}: ` : ""}${s.text}`).join("\n");
+  return segments
+    .filter((s) => !isFiller(s.text))
+    .map((s) => `[${clock(s.at)}] ${s.speaker ? `${s.speaker}: ` : ""}${s.text}`)
+    .join("\n");
 }
 
 /** Reads WebVTT / SRT captions (Zoom, Meet, Teams exports) or plain text into segments. */

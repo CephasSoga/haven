@@ -5,7 +5,7 @@ import { useSettings } from "@/store/settings";
 import { expandEvents, fromMinutes, PRIORITIES, taskTypes, toMinutes, useCalendar, type Priority } from "@/modules/calendar/store";
 import { newTaskDraft } from "@/modules/calendar/TaskDialog";
 import { useNotes } from "@/modules/notes/store";
-import { clock, transcriptText, useMeetings, type Analysis, type Meeting } from "./store";
+import { clock, isFiller, transcriptText, useMeetings, type Analysis, type Meeting } from "./store";
 
 /* ---------- Long meetings ---------- */
 
@@ -276,11 +276,13 @@ export async function correctTranscript(meeting: Meeting, onStep?: (step: string
   const line = (i: number) => `${i + 1}. ${segments[i].speaker ? `${segments[i].speaker}: ` : ""}${segments[i].text}`;
   // Corrections can be as long as the lines themselves, so each piece leaves the same again for the answer.
   const room = Math.min(FIX_PART_TOKENS, Math.max(800, Math.floor((tokenBudget() - estimateTokens(FIX_SYSTEM + intro) - 1200) / 2.3)));
+  // Lines with no words ("…", silence) aren't worth sending; they keep their numbers, and go.
   const pieces = inPieces(
-    segments.map((_, i) => i),
+    segments.map((_, i) => i).filter((i) => !isFiller(segments[i].text)),
     line,
     room,
   );
+  if (!pieces.length) return { segments: segments.filter((s) => !isFiller(s.text)), skipped: [], parts: 0 };
   const skipped: number[] = [];
   let lastError: unknown;
   let done = 0;
@@ -322,7 +324,7 @@ export async function correctTranscript(meeting: Meeting, onStep?: (step: string
     // Claude sometimes repeats the speaker label it was shown; it's kept separately.
     s.text = s.speaker ? f.text.replace(new RegExp(`^${s.speaker}:\\s*`), "") : f.text;
   }
-  return { segments: out.filter((s) => s.text.trim()), skipped: skipped.sort((a, b) => a - b), parts: pieces.length };
+  return { segments: out.filter((s) => s.text.trim() && !isFiller(s.text)), skipped: skipped.sort((a, b) => a - b), parts: pieces.length };
 }
 
 const CONDENSE_SCHEMA = {

@@ -273,8 +273,10 @@ export type JsonRequest = {
   minAnswer?: number;
   /** Lets the caller stop the request (a Stop button) */
   signal?: AbortSignal;
-  /** Give up after this long; default 3 minutes */
+  /** Give up after this long; default 3 minutes. Counted from when the request is sent, not while waiting for an allowance. */
   timeoutMs?: number;
+  /** Set by askJson: starts (or restarts) the time limit, when a request actually goes out */
+  startClock?: () => void;
 };
 
 /** Asks the chosen service for an answer in the given JSON shape, and returns it parsed. */
@@ -286,13 +288,20 @@ export async function askJson<T>(original: JsonRequest): Promise<T> {
   const limit = original.timeoutMs ?? 180_000;
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => ((timedOut = true), controller.abort()), limit);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The clock runs while the service is answering. Waiting for Groq's per-minute allowance doesn't count:
+  // that's our own pacing, not the model being slow.
+  const startClock = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ((timedOut = true), controller.abort()), limit);
+  };
   const stop = () => controller.abort();
   if (original.signal?.aborted) controller.abort();
   original.signal?.addEventListener("abort", stop);
-  const req = { ...original, signal: controller.signal };
+  const req = { ...original, signal: controller.signal, startClock };
   let text: string;
   try {
+    if (provider !== "groq") startClock();
     text = provider === "anthropic" ? await viaAnthropic(req, key, models.anthropic) : provider === "openai" ? await viaOpenAi(req, key, models.openai) : await viaGroq(req, key, models.groq);
   } catch (e) {
     if (controller.signal.aborted) {
@@ -382,11 +391,13 @@ function tokensPerMinute(detail?: string) {
 
 async function viaGroq(req: JsonRequest, key: string, model: string) {
   type Out = { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string } }[] };
+  // GPT-OSS now and then reaches for one of its built-in tools instead of answering; asked again with a reminder, it answers.
+  let toolSlips = 0;
   const ask = (maxTokens: number, effort: string) =>
     post("Groq", "https://api.groq.com/openai/v1/chat/completions", key, {
       model,
       messages: [
-        { role: "system", content: req.system },
+        { role: "system", content: toolSlips ? `${req.system}\n\nAnswer directly with the JSON asked for. There are no tools to call.` : req.system },
         { role: "user", content: req.user },
       ],
       response_format: { type: "json_schema", json_schema: { name: req.name, schema: req.schema, strict: true } },
@@ -405,10 +416,18 @@ async function viaGroq(req: JsonRequest, key: string, model: string) {
   let res: Out;
   for (let attempt = 0; ; attempt++) {
     await pace(reading + max, req.signal);
+    req.startClock?.();
     try {
       res = await ask(max, effort);
       break;
     } catch (e) {
+      if (e instanceof ServiceError && e.status === 400 && (e.code === "tool_use_failed" || /called a tool|tool call/i.test(e.detail ?? ""))) {
+        if (toolSlips++ < 2) {
+          effort = "low";
+          continue;
+        }
+        throw new AiError(`${model.includes("gpt-oss") ? "GPT-OSS" : "The model"} kept trying to use a tool instead of answering. Try again in a moment, or pick another model in Settings.`);
+      }
       // The answer didn't fit the requested shape — usually because it ran out of room and stopped mid-way.
       if (e instanceof ServiceError && e.code === "json_validate_failed") {
         // Often what it wrote is fine after all (Groq is strict about the shape); use it when it reads as JSON.
