@@ -5,6 +5,7 @@ import { Button, ColorPicker, Field, Input, Modal, Segmented, Select, Switch, Te
 import { cn, swatch } from "@/lib/utils";
 import { addTaskType, formatDuration, PRIORITIES, REPEAT_LABELS, removeTaskType, TASK_TYPES, timeRange, useCalendar, useTaskTypes, type Priority, type Repeat, type TaskDraft } from "./store";
 import { dayLabel, slotsUntilNow, usePlan } from "./plan";
+import { DateField } from "@/components/pickers";
 
 const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
 const CHUNKS = [15, 30, 45, 60, 90];
@@ -437,10 +438,10 @@ export function TaskDialog({ draft, onClose }: { draft: TaskDraft | null; onClos
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Deadline">
-            {(id) => <Input id={id} type="date" value={f.deadline ?? ""} onChange={(e) => patch({ deadline: e.target.value || undefined })} />}
+            {(id) => <DateField id={id} clearable placeholder="None" value={f.deadline ?? ""} onChange={(v) => patch({ deadline: v || undefined })} />}
           </Field>
           <Field label="Start no earlier than">
-            {(id) => <Input id={id} type="date" value={f.startDate ?? ""} onChange={(e) => patch({ startDate: e.target.value || undefined })} />}
+            {(id) => <DateField id={id} clearable placeholder="Any time" value={f.startDate ?? ""} onChange={(v) => patch({ startDate: v || undefined })} />}
           </Field>
         </div>
         {f.deadline && (

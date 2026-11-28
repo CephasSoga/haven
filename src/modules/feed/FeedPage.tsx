@@ -11,6 +11,7 @@ import { useNotes } from "@/modules/notes/store";
 import { progress, refreshFeed } from "./scheduler";
 import { hostOf, REGIONS, TOPICS, type Topic } from "./sources";
 import { SUGGESTED, useFeed, type Edition, type FeedItem, type Section } from "./store";
+import { TimeField } from "@/components/pickers";
 
 const ACCENT = "#c0583f";
 
@@ -540,7 +541,7 @@ function CustomizeDialog({ open, onClose, onApply }: { open: boolean; onClose: (
       <div className="flex flex-col gap-7">
         <Preferences />
         <div className="grid gap-4 border-t border-line pt-6 sm:grid-cols-2">
-          <Field label="Prepare automatically from">{(id) => <Input id={id} type="time" value={f.time} onChange={(e) => e.target.value && f.setPrefs({ time: e.target.value })} />}</Field>
+          <Field label="Prepare automatically from">{(id) => <TimeField id={id} value={f.time} onChange={(v) => v && f.setPrefs({ time: v })} step={15} />}</Field>
           <Field label="Stories per section">
             {(id) => (
               <Select id={id} value={f.perInterest} onChange={(e) => f.setPrefs({ perInterest: Number(e.target.value) })}>

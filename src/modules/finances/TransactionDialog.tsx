@@ -6,6 +6,7 @@ import { cn, swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { categoryIcon } from "./icons";
 import { TRANSFER, useFinance, type Transaction, type TxKind } from "./store";
+import { DateField } from "@/components/pickers";
 
 export type TxDraft = Omit<Transaction, "id" | "amount"> & { id?: string; amount?: number };
 
@@ -185,7 +186,7 @@ export function TransactionDialog({ draft, onClose }: { draft: TxDraft | null; o
 
         <div className={cn("grid gap-3", !transfer && "grid-cols-2")}>
           <Field label="Date">
-            {(id) => <Input id={id} type="date" value={f.date} onChange={(e) => e.target.value && patch({ date: e.target.value })} />}
+            {(id) => <DateField id={id} value={f.date} onChange={(v) => v && patch({ date: v })} />}
           </Field>
           {!transfer && <Field label="Account">{(id) => accountSelect(id, f.accountId, (v) => patch({ accountId: v }))}</Field>}
         </div>

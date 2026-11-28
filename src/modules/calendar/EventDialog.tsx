@@ -6,6 +6,7 @@ import { dayKey, parseDay } from "@/lib/dates";
 import { cn, swatch } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { fromMinutes, REPEAT_LABELS, repeatSummary, toMinutes, useCalendar, weeklyDays, type EventDraft, type Repeat } from "./store";
+import { DateField, TimeField } from "@/components/pickers";
 
 export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onClose: () => void }) {
   const save = useCalendar((s) => s.save);
@@ -97,7 +98,7 @@ export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onCl
 
         <div className="grid grid-cols-2 gap-3">
           <Field label={repeating ? "Starts on" : "Date"} className="col-span-2 sm:col-span-1">
-            {(id) => <Input id={id} type="date" value={f.date} onChange={(e) => e.target.value && patch({ date: e.target.value })} />}
+            {(id) => <DateField id={id} value={f.date} onChange={(v) => v && patch({ date: v })} />}
           </Field>
           <div className="col-span-2 flex items-end pb-2.5 sm:col-span-1">
             <Switch
@@ -112,12 +113,10 @@ export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onCl
             <>
               <Field label="Starts">
                 {(id) => (
-                  <Input
+                  <TimeField
                     id={id}
-                    type="time"
-                    value={f.start}
-                    onChange={(e) => {
-                      const start = e.target.value;
+                    value={f.start ?? ""}
+                    onChange={(start) => {
                       if (!start) return;
                       // Keep the duration when the start moves.
                       const dur = f.start && f.end ? toMinutes(f.end) - toMinutes(f.start) : 60;
@@ -128,7 +127,7 @@ export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onCl
               </Field>
               <Field label="Ends">
                 {(id) => (
-                  <Input id={id} type="time" value={f.end ?? ""} onChange={(e) => patch({ end: e.target.value || undefined })} />
+                  <TimeField id={id} value={f.end ?? ""} onChange={(v) => patch({ end: v || undefined })} invalid={!!f.start && !!f.end && f.end <= f.start} />
                 )}
               </Field>
             </>
@@ -194,7 +193,7 @@ export function EventDialog({ draft, onClose }: { draft: EventDraft | null; onCl
               </Field>
               {f.until && (
                 <Field label="Last day">
-                  {(id) => <Input id={id} type="date" min={f.date} value={f.until} onChange={(e) => e.target.value && patch({ until: e.target.value })} />}
+                  {(id) => <DateField id={id} min={f.date} value={f.until ?? ""} onChange={(v) => v && patch({ until: v })} />}
                 </Field>
               )}
             </div>

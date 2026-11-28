@@ -6,6 +6,7 @@ import { formatDuration } from "@/modules/calendar/store";
 import { draftProject, type Draft } from "./draft";
 import { createProject } from "./logic";
 import { ACCENT } from "./ProjectDialog";
+import { DateField } from "@/components/pickers";
 
 /** Describe a project, or paste a plan: the AI drafts stages and tasks, you review, then it's created. */
 export function DraftDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
@@ -102,7 +103,7 @@ export function DraftDialog({ open, onClose, onCreated }: { open: boolean; onClo
               />
             )}
           </Field>
-          <Field label="Deadline (optional)">{(id) => <Input id={id} type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} className="w-44" />}</Field>
+          <Field label="Deadline (optional)">{(id) => <DateField id={id} clearable placeholder="None" value={deadline} onChange={setDeadline} className="w-52" />}</Field>
           {busy && (
             <p className="flex items-center gap-2 text-[13px] text-muted">
               <Loader2 className="size-4 animate-spin" /> {assistant}: {busy}…

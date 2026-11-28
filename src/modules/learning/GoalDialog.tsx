@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { LEVELS, setSessions, useLearning, type Goal, type Level } from "./store";
 import { ACCENT } from "./parts";
+import { DateField, TimeField } from "@/components/pickers";
 
 const HOURS = [1, 2, 3, 4, 5, 6, 8, 10, 15];
 const LENGTHS = [20, 30, 45, 60, 90, 120];
@@ -115,7 +116,7 @@ export function GoalDialog({ open, onClose, goal, onCreated }: { open: boolean; 
             <span className="text-[13px] font-medium text-muted">Where you are now</span>
             <Segmented<Level> layoutId="learn-level" value={level} onChange={setLevel} options={(Object.keys(LEVELS) as Level[]).map((l) => ({ value: l, label: <span className="whitespace-nowrap">{LEVELS[l]}</span> }))} />
           </div>
-          <Field label="By (optional)">{(id) => <Input id={id} type="date" value={target} onChange={(e) => setTarget(e.target.value)} className="w-44" />}</Field>
+          <Field label="By (optional)">{(id) => <DateField id={id} clearable placeholder="No date" value={target} onChange={setTarget} min={new Date().toISOString().slice(0, 10)} className="w-52" />}</Field>
         </div>
         <div className="flex flex-wrap gap-5">
           <Field label="Time each week">
@@ -150,7 +151,7 @@ export function GoalDialog({ open, onClose, goal, onCreated }: { open: boolean; 
               <DayPicker value={days} onChange={setDays} />
               <div className="flex flex-wrap items-center gap-2 text-[13px]">
                 <span className="text-muted">at</span>
-                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="h-9 w-32" aria-label="Time" />
+                <TimeField value={time} onChange={(v) => v && setTime(v)} className="h-9 w-36" compact aria-label="Time" />
                 <span className="text-muted">for</span>
                 <Select value={length} onChange={(e) => setLength(Number(e.target.value))} className="h-9 w-28" aria-label="Length">
                   {LENGTHS.map((m) => (

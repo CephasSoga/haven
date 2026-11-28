@@ -5,6 +5,7 @@ import { ask } from "@/components/confirm";
 import { uid } from "@/lib/utils";
 import { PRIORITIES, PROJECT_STATUSES, useCalendar, type Priority, type Project, type ProjectStatus, type Stage } from "@/modules/calendar/store";
 import { fromTemplate } from "./logic";
+import { DateField } from "@/components/pickers";
 
 export const ACCENT = "#4f6bed";
 
@@ -123,8 +124,8 @@ export function ProjectDialog({ open, onClose, project, onCreated }: { open: boo
         <Field label="Name">{(id) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Launch the website, Doctoral application" />}</Field>
         <Field label="What it's for (optional)">{(id) => <Textarea id={id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Start no earlier than">{(id) => <Input id={id} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />}</Field>
-          <Field label="Deadline">{(id) => <Input id={id} type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />}</Field>
+          <Field label="Start no earlier than">{(id) => <DateField id={id} clearable placeholder="Any time" value={startDate} onChange={setStartDate} />}</Field>
+          <Field label="Deadline">{(id) => <DateField id={id} clearable placeholder="None" value={deadline} onChange={setDeadline} min={startDate || undefined} />}</Field>
         </div>
         {deadline && <Switch checked={hard} onChange={setHard} label="Hard deadline: its tasks go ahead of higher priorities if they'd be late" />}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -173,11 +174,13 @@ export function ProjectDialog({ open, onClose, project, onCreated }: { open: boo
                   className="h-9 min-w-0 flex-1 text-[13px]"
                   autoFocus={!s.name}
                 />
-                <Input
-                  type="date"
+                <DateField
                   value={s.deadline ?? ""}
-                  onChange={(e) => setStages(stages.map((x) => (x.id === s.id ? { ...x, deadline: e.target.value || undefined } : x)))}
-                  className="h-9 w-40 text-[13px]"
+                  onChange={(v) => setStages(stages.map((x) => (x.id === s.id ? { ...x, deadline: v || undefined } : x)))}
+                  className="h-9 w-44"
+                  compact
+                  clearable
+                  placeholder="No deadline"
                   aria-label={`${s.name || "Stage"} deadline`}
                   title="Stage deadline (optional)"
                 />

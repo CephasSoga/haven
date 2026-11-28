@@ -12,6 +12,7 @@ import { cycleLabel, daysUntil, perMonth as perMonthOf, whenLabel } from "@/modu
 import { CycleField } from "@/modules/subscriptions/CycleField";
 import { categoryIcon } from "./icons";
 import { useFinance, type Bill } from "./store";
+import { DateField } from "@/components/pickers";
 
 export type BillDraft = Omit<Bill, "id"> & { id?: string };
 
@@ -231,7 +232,7 @@ export function BillDialog({ draft, onClose }: { draft: BillDraft | null; onClos
           <CycleField label="How often" value={f} onChange={(r) => patch({ cycle: r.cycle, every: r.every })} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Next due">{(id) => <Input id={id} type="date" value={f.due} onChange={(e) => e.target.value && patch({ due: e.target.value })} />}</Field>
+          <Field label="Next due">{(id) => <DateField id={id} value={f.due} onChange={(v) => v && patch({ due: v })} />}</Field>
           <Field label="Paid from">
             {(id) => (
               <Select id={id} value={f.accountId} onChange={(e) => patch({ accountId: e.target.value })}>

@@ -1,3 +1,4 @@
+import { DateField } from "@/components/pickers";
 import { useMemo, useState, type ReactNode } from "react";
 import { format } from "date-fns";
 import { AnimatePresence, motion } from "motion/react";
@@ -525,11 +526,11 @@ function SubDialog({ draft, onClose }: { draft: SubDraft | null; onClose: () => 
 
         <div className="grid grid-cols-2 gap-3">
           <Field label={f.status === "trial" ? "First charge" : "Next renewal"}>
-            {(id) => <Input id={id} type="date" value={f.renews} onChange={(e) => e.target.value && patch({ renews: e.target.value })} />}
+            {(id) => <DateField id={id} value={f.renews} onChange={(v) => v && patch({ renews: v })} />}
           </Field>
           {f.status === "trial" ? (
             <Field label="Trial ends">
-              {(id) => <Input id={id} type="date" value={f.trialEnds ?? ""} onChange={(e) => patch({ trialEnds: e.target.value || undefined, renews: e.target.value || f.renews })} />}
+              {(id) => <DateField id={id} clearable value={f.trialEnds ?? ""} onChange={(v) => patch({ trialEnds: v || undefined, renews: v || f.renews })} />}
             </Field>
           ) : (
             <Field label="Category">

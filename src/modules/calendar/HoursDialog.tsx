@@ -1,23 +1,27 @@
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { Button, Field, Input, Modal, Segmented } from "@/components/ui";
+import { Button, Field, Modal, Segmented } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/store/settings";
 import { fromMinutes, toMinutes, useCalendar, type TimeRange, type WeekHours } from "./store";
+import { TimeField } from "@/components/pickers";
 
 /** One stretch of hours: start – end, with a remove button for the extra ones. */
 function RangeRow({ range, onChange, onRemove }: { range: TimeRange; onChange: (r: Partial<TimeRange>) => void; onRemove?: () => void }) {
   const backwards = range.end <= range.start;
   return (
     <div className="flex items-center gap-2">
-      <Input type="time" value={range.start} onChange={(e) => e.target.value && onChange({ start: e.target.value })} className="h-9 min-w-0" />
+      <TimeField value={range.start} onChange={(v) => v && onChange({ start: v })} className="h-9 min-w-0 flex-1" compact step={15} aria-label="From" />
       <span className="text-faint">–</span>
-      <Input
-        type="time"
+      <TimeField
         value={range.end}
-        onChange={(e) => e.target.value && onChange({ end: e.target.value })}
-        className={cn("h-9 min-w-0", backwards && "border-neg focus:border-neg")}
+        onChange={(v) => v && onChange({ end: v })}
+        className="h-9 min-w-0 flex-1"
+        compact
+        step={15}
+        invalid={backwards}
         title={backwards ? "Ends before it starts — these hours are ignored" : undefined}
+        aria-label="Until"
       />
       {onRemove ? (
         <button type="button" onClick={onRemove} aria-label="Remove these hours" className="shrink-0 rounded-lg p-1.5 text-faint hover:bg-sunken hover:text-ink">
